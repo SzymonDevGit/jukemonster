@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jukemonster</title>
+  <meta name="description" content="A one-screen Hitster-style music timeline game. Everyone brings a Spotify playlist; Jukemonster is the jukebox.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23080808'/%3E%3Ccircle cx='32' cy='32' r='10' fill='%23c6893d'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23100c0a'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="fade"></div>
+
+  <!-- Login -->
+  <section id="screen-login" class="screen">
+    <div class="center-col">
+      <h1 class="logo bob">JUKEMONSTER</h1>
+      <p class="sub">Everyone brings a playlist. This is just the jukebox.</p>
+      <div class="vinyl big spin"></div>
+      <button id="login-btn" class="btn filled wide">Sign in with Spotify</button>
+      <p class="muted small">Needs Spotify Premium. Your login stays in this browser only.</p>
+      <p id="login-status" class="status"></p>
+    </div>
+  </section>
+
+  <!-- Setup -->
+  <section id="screen-setup" class="screen hidden">
+    <header class="setup-head">
+      <h1 class="logo bob">JUKEMONSTER</h1>
+      <p class="sub">Everyone brings a playlist. This is just the jukebox.</p>
+      <p class="muted small">Signed in as <span id="user-name">...</span> · <a href="#" id="logout-link">Sign out</a></p>
+    </header>
+
+    <div class="panel">
+      <div class="row">
+        <span class="label">Players</span>
+        <div id="player-count" class="seg"></div>
+      </div>
+      <div id="player-rows"></div>
+
+      <div class="row actions">
+        <button id="load-btn" class="btn filled">Load Playlists</button>
+        <button id="test-btn" class="btn" disabled>Test Audio</button>
+        <button id="heard-btn" class="btn" disabled>Heard it!</button>
+      </div>
+      <div class="row">
+        <span class="label">Play on</span>
+        <select id="device-select"><option value="">Looking for devices...</option></select>
+        <button id="refresh-devices" class="btn small-btn" title="Look for Spotify devices again">↻</button>
+      </div>
+      <p id="setup-status" class="status"></p>
+    </div>
+
+    <div class="panel">
+      <span class="label">Options</span>
+      <label class="check"><input type="checkbox" id="opt-mix"><span></span>Mix all playlists together</label>
+      <label class="check"><input type="checkbox" id="opt-months"><span></span>Include months</label>
+      <label class="check"><input type="checkbox" id="opt-reduce"><span></span>Reduce same year (max 3 per year)</label>
+      <div class="seg modes">
+        <button id="mode-popular" class="btn toggle active" disabled>Most Popular</button>
+        <button id="mode-recent" class="btn toggle" disabled>Most Recently Added</button>
+      </div>
+    </div>
+
+    <div class="center-col">
+      <button id="start-btn" class="btn filled big-btn" disabled>Start Game</button>
+      <p id="start-hint" class="muted small">Load playlists and confirm audio first.</p>
+    </div>
+  </section>
+
+  <!-- Play -->
+  <section id="screen-play" class="screen hidden">
+    <header class="topbar">
+      <span class="logo small-logo">JUKEMONSTER</span>
+      <span id="deck-label" class="sub"></span>
+      <button id="back-btn" class="btn small-btn">Setup</button>
+    </header>
+
+    <p class="sub center">Whose turn is it?</p>
+    <div id="turn-buttons" class="turns"></div>
+
+    <div class="card-wrap">
+      <div id="card" class="card">
+        <div class="face front">
+          <div id="card-empty" class="muted">Press "Play Card" to spin one up</div>
+          <div id="card-mystery" class="hidden">
+            <div class="vinyl spin"></div>
+            <div class="np">NOW PLAYING</div>
+            <div class="muted small">Place your card, then hit Reveal</div>
+          </div>
+        </div>
+        <div class="face back">
+          <div id="card-date" class="date"></div>
+          <div id="card-title" class="title"></div>
+          <div id="card-artist" class="artist"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bar"><div id="bar-fill"></div></div>
+
+    <div class="row center play-actions">
+      <button id="play-btn" class="btn filled big-btn">Play Card</button>
+      <button id="reveal-btn" class="btn big-btn" disabled>Reveal</button>
+      <button id="next-btn" class="btn filled big-btn hidden">Next Card</button>
+    </div>
+    <p id="play-status" class="status center"></p>
+  </section>
+
+  <footer class="foot muted small">Jukemonster by <a href="https://szy.monster/">szy.monster</a></footer>
+
+  <script src="app.js"></script>
+  <script src="https://sdk.scdn.co/spotify-player.js" async></script>
+</body>
+</html>
