@@ -314,6 +314,7 @@ async function fetchPlaylistCards(id) {
         month,
         track_id: t.id,
         duration_ms: t.duration_ms || 0,
+        album_uri: (t.album || {}).uri || "",
         popularity: t.popularity || 0,
         added_at: entry.added_at || "",
       });
@@ -347,6 +348,14 @@ function softFail(err) {
   return null;
 }
 
+// What to do when this browser can't play Spotify's protected audio.
+function browserHelp() {
+  const firefox = /Firefox\//.test(navigator.userAgent);
+  return firefox
+    ? "Firefox isn't letting Spotify's protected music play. In Firefox Settings › General, tick \"Play DRM-controlled content\" and reload this page. Or pick your Spotify app under Play on, or use Chrome or Edge."
+    : "This browser isn't letting Spotify's protected music play. Turn on protected content (DRM) in its settings and reload, or pick your Spotify app under Play on.";
+}
+
 const playback = {
   player: null,
   browserDeviceId: null,
@@ -358,6 +367,10 @@ const playback = {
   gen: 0,            // bumped by every play() and pause(), so an older start notices and stops
   activePlay: null,  // gen of the play() that should be making sound, null after pause()
   late: 0,           // how far past its start point the last song already was when confirmed
+  errors: 0,         // playback_error events from this browser's player
+  browserOk: false,  // this browser has played a song with no errors
+  browserBad: "",    // why this browser can't play, if we know
+  playStarted: 0,    // when the last play on this browser was confirmed
 
   async listDevices() {
     const data = await api("/me/player/devices");
@@ -368,12 +381,13 @@ const playback = {
     return devices;
   },
 
-  // The device the user picked, else this browser, else whichever is active.
+  // The device the user picked, else this browser (if it can play), else whichever is active.
   pick(devices) {
     const chosen = this.chosenId === "browser" ? this.browserDeviceId : this.chosenId;
     return devices.find((d) => d.id === chosen)
-      || devices.find((d) => d.id === this.browserDeviceId)
+      || (!this.browserBad && devices.find((d) => d.id === this.browserDeviceId))
       || devices.find((d) => d.is_active)
+      || devices.find((d) => d.id !== this.browserDeviceId)
       || devices[0];
   },
 
@@ -420,24 +434,43 @@ const playback = {
 
   // Spotify can answer "OK" while the device stays silent, so wait until it really
   // plays. Resolves how far past startMs the song already is, or null if it never started.
-  async confirmStarted(id, card, startMs, gen, timeout) {
+  async confirmStarted(id, card, startMs, gen, timeout, errorsBefore) {
     const start = performance.now();
     const local = id === this.browserDeviceId && !!this.player;
     let prev = null;
+    let okSince = null;
+    let misses = 0;
     while (performance.now() - start < timeout) {
       // Checking this browser is instant, so look often: short snippets start their timer from here.
       await sleep(local ? 25 : 500);
       this.check(gen);
       if (local) {
+        // The browser player's state says "playing" even when it can't decode
+        // the audio, so its error events are the only sign of silence.
+        if (this.errors > errorsBefore) return null;
         const st = await this.player.getCurrentState().catch(() => null);
-        if (st && !st.paused && !st.loading && sameTrack(st.track_window && st.track_window.current_track, card)) {
-          return Math.max(0, (st.position || 0) - startMs);
+        if (!(st && !st.paused && !st.loading && sameTrack(st.track_window && st.track_window.current_track, card))) {
+          okSince = null;
+          continue;
         }
+        const late = Math.max(0, (st.position || 0) - startMs);
+        if (this.browserOk) return late;
+        // First song in this browser: make sure no error follows before trusting it.
+        if (okSince === null) okSince = performance.now();
+        else if (performance.now() - okSince > 2000) { this.browserOk = true; return late; }
         continue;
       }
       const now = await this.nowPlaying();
       this.check(gen);
-      if (!playingOn(now, id, card)) { prev = null; continue; }
+      if (!playingOn(now, id, card)) {
+        prev = null;
+        // A refused command leaves the device stopped; no need to wait the full time.
+        const idle = !now || !now.is_playing || !now.item || !sameTrack(now.item, card);
+        misses = idle ? misses + 1 : 0;
+        if (misses >= 2 && performance.now() - start > 2500) return null;
+        continue;
+      }
+      misses = 0;
       // "Playing" can be reported before any sound, so wait for the position to move.
       const pos = now.progress_ms || 0;
       if ((prev !== null && pos > prev) || pos > startMs + 150) return Math.max(0, pos - startMs);
@@ -448,7 +481,7 @@ const playback = {
 
   // Resolves true once the song is audibly playing, false if pause() or another
   // play() took over meanwhile. Tries a few ways of starting it, because some
-  // Spotify apps ignore the plain one. `note` gets progress messages for slow starts.
+  // Spotify apps ignore some of them. `note` gets progress messages for slow starts.
   async play(card, startMs, note = () => {}) {
     const gen = ++this.gen;
     this.activePlay = gen;
@@ -465,18 +498,28 @@ const playback = {
       d = await this.device();
       this.check(gen);
       const local = d.id === this.browserDeviceId;
+      if (local && this.browserBad) throw new Error(this.browserBad);
       const at = `device_id=${encodeURIComponent(d.id)}`;
       const uri = `spotify:track:${card.track_id}`;
       if (card.duration_ms) startMs = Math.max(0, Math.min(startMs, card.duration_ms - 5000));
-      const attempts = [
-        { name: "song", body: { uris: [uri], position_ms: startMs } },
-        { name: "song then seek", body: { uris: [uri] }, seek: true, transfer: true },
-      ];
+      // Since autumn 2026 some Spotify apps answer "OK" to a bare song and then
+      // play nothing, but play the same song from its playlist or album fine.
+      let attempts = [];
       if (card.playlist) {
-        attempts.push({ name: "from playlist", body: { context_uri: `spotify:playlist:${card.playlist}`, offset: { uri }, position_ms: startMs }, transfer: true, context: true });
+        attempts.push({ name: "from playlist", body: { context_uri: `spotify:playlist:${card.playlist}`, offset: { uri }, position_ms: startMs }, context: true });
       }
+      if (card.album_uri) {
+        attempts.push({ name: "from album", body: { context_uri: card.album_uri, offset: { uri }, position_ms: startMs }, context: true });
+      }
+      attempts.push({ name: "song", body: { uris: [uri], position_ms: startMs } });
+      // Remember what worked on each device (this browser's id changes every visit).
+      const methods = store.get("jm_methods", {});
+      const key = local ? "browser" : d.id;
+      const known = attempts.find((a) => a.name === methods[key]);
+      if (known) attempts = [known, ...attempts.filter((a) => a !== known)];
       debug(`play "${card.title}" on ${d.name} (${local ? "this browser" : d.type}, ${d.is_active ? "active" : "idle"})`);
 
+      const errorsBefore = this.errors;
       if (!d.is_active) {
         if (!local) note(`Waking up ${d.name}...`);
         await this.transfer(d.id).catch(softFail); // best effort; the play call reports real problems
@@ -489,6 +532,7 @@ const playback = {
       let used = null;
       let lastErr = null;
       for (const [i, a] of attempts.entries()) {
+        if (local && this.errors > errorsBefore) break; // other ways fail the same way in this browser
         if (i > 0) {
           // A slow device may have started after all; don't restart a song that's already going.
           const now = await this.nowPlaying();
@@ -499,12 +543,6 @@ const playback = {
             break;
           }
           note("Still starting, trying another way...");
-        }
-        if (a.transfer) {
-          await this.transfer(d.id).catch(softFail);
-          this.check(gen);
-          await sleep(600);
-          this.check(gen);
         }
         this.lastDevice = d.id;
         this.lastName = local ? "this browser" : `"${d.name}"`;
@@ -518,18 +556,19 @@ const playback = {
           continue;
         }
         this.check(gen);
-        if (a.seek) {
-          await sleep(400);
-          this.check(gen);
-          await api(`/me/player/seek?position_ms=${startMs}&${at}`, { method: "PUT" }).catch(softFail);
-        }
-        const wait = local ? 3500 : i === 0 && !d.is_active ? 6000 : 4000;
-        late = await this.confirmStarted(d.id, card, startMs, gen, wait);
+        const wait = local ? 4000 : i === 0 && !d.is_active ? 6000 : 4000;
+        late = await this.confirmStarted(d.id, card, startMs, gen, wait, errorsBefore);
         if (late !== null) { used = a; break; }
         debug(`"${a.name}" didn't start`);
       }
 
       if (late === null) {
+        if (local && this.errors > errorsBefore) {
+          debug(`gave up: ${this.errors - errorsBefore} playback errors in this browser`);
+          this.browserOk = false;
+          await this.stop(d.id);
+          throw new Error(`No sound: this browser couldn't play "${card.title}". ${browserHelp()}`);
+        }
         const now = await this.nowPlaying();
         const seen = !now ? "Spotify shows nothing playing anywhere."
           : `Spotify shows ${now.device ? `"${now.device.name}"` : "a device"} ${now.is_playing ? "playing" : "stopped"}${now.item ? ` with "${now.item.name}"` : " with no song loaded"}.`;
@@ -542,11 +581,16 @@ const playback = {
           : `"${d.name}" didn't start "${card.title}". ${seen} Try again, or pick "This browser" under Play on.`);
       }
       debug(`playing (${used.name}), ${late} ms in`);
+      if (methods[key] !== used.name) {
+        methods[key] = used.name;
+        store.set("jm_methods", methods);
+      }
       if (used.context && card.duration_ms) {
-        // A playlist would carry on to its next song (a spoiler), so stop just before the end.
-        const left = card.duration_ms - startMs - late - 1500;
+        // A playlist or album would carry on to its next song (a spoiler), so stop before the end.
+        const left = card.duration_ms - startMs - late - 3000;
         this.endTimer = setTimeout(() => { if (gen === this.gen) this.pause(); }, Math.max(0, left));
       }
+      if (local) this.playStarted = performance.now();
       this.late = late;
       return true;
     } catch (err) {
@@ -592,15 +636,35 @@ const playback = {
 };
 
 // Spotify may swap in a regional copy of a song with a different id (and no
-// longer says so for hobby apps), so a matching title counts too.
+// longer says so for hobby apps), so the same title by the same artist counts too.
 function sameTrack(t, card) {
   if (!t) return false;
-  return t.id === card.track_id || t.uri === `spotify:track:${card.track_id}`
-    || (t.linked_from && t.linked_from.id === card.track_id) || (!!t.name && t.name === card.title);
+  if (t.id === card.track_id || t.uri === `spotify:track:${card.track_id}`) return true;
+  if (t.linked_from && t.linked_from.id === card.track_id) return true;
+  if (!t.name || t.name !== card.title) return false;
+  const artist = t.artists && t.artists[0] && t.artists[0].name;
+  return !artist || card.artists.startsWith(artist);
 }
 
 function playingOn(now, id, card) {
   return !!now && now.is_playing && !!now.device && now.device.id === id && sameTrack(now.item, card);
+}
+
+// Asks the browser whether it can decrypt Spotify's protected audio at all.
+// In Firefox this also brings up its "enable DRM" bar when DRM is off.
+async function checkDrm() {
+  if (!window.isSecureContext) return "page not secure";
+  if (!navigator.requestMediaKeySystemAccess) return "no DRM support";
+  try {
+    const access = await navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{
+      initDataTypes: ["cenc"],
+      audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"' }],
+    }]);
+    await access.createMediaKeys();
+    return "ok";
+  } catch (err) {
+    return err.name || "failed";
+  }
 }
 
 // The SDK can finish loading before sign-in does, so start the player once both are done.
@@ -608,6 +672,7 @@ let sdkLoaded = false;
 let signedIn = false;
 let playerStarted = false;
 let playerNote = "";
+let drmResult = "not checked";
 
 window.onSpotifyWebPlaybackSDKReady = () => {
   sdkLoaded = true;
@@ -626,6 +691,14 @@ function startBrowserPlayer() {
     setStatus($("setup-status"), text, "warn");
     refreshDevices();
   };
+  checkDrm().then((result) => {
+    drmResult = result;
+    debug(`DRM check: ${result}`);
+    if (result !== "ok") {
+      playback.browserBad = `No sound in this browser. ${browserHelp()}`;
+      refreshDevices();
+    }
+  });
   const player = new Spotify.Player({
     name: "Jukemonster",
     getOAuthToken: (cb) => accessToken().then(cb).catch(() => problem("This browser couldn't sign in to play music. Sign out and sign in again, or pick your Spotify app under Play on.")),
@@ -648,8 +721,14 @@ function startBrowserPlayer() {
   player.addListener("initialization_error", () => problem("This browser can't play Spotify music itself (it needs protected content turned on). Pick your Spotify app under Play on."));
   player.addListener("authentication_error", () => problem("This browser couldn't sign in to play music. Sign out and sign in again, or pick your Spotify app under Play on."));
   player.addListener("playback_error", ({ message }) => {
+    playback.errors++;
     debug(`browser playback error: ${message}`);
-    setStatus($(game ? "play-status" : "setup-status"), `Spotify couldn't play that song (${message}).`, "err");
+    // An error just after a confirmed start means the browser went silent after all.
+    if (playback.inBrowser() && playback.activePlay !== null && performance.now() - playback.playStarted < 5000) {
+      playback.browserOk = false;
+      setStatus($(game ? "play-status" : "setup-status"), `No sound: this browser couldn't play that song. ${browserHelp()}`, "err");
+      if (!game) $("heard-btn").disabled = true;
+    }
   });
   player.addListener("autoplay_failed", () => setStatus($(game ? "play-status" : "setup-status"), "The browser blocked sound. Click anywhere on the page, then press Replay.", "warn"));
   player.connect().then((ok) => {
@@ -669,7 +748,9 @@ async function copyDetails(e) {
   const lines = ["Jukemonster details (no passwords or keys)", `Browser: ${navigator.userAgent}`,
     `Browser player: ${playback.browserDeviceId ? "ready" : sdkLoaded ? `script loaded, not ready${playerNote ? ` (${playerNote})` : ""}` : "script not loaded"}`,
     `Chosen device: ${playback.chosenId || "(automatic)"}`,
-    `Permissions: ${(store.get("jm_token") || {}).scope || "(not recorded)"}`];
+    `Permissions: ${(store.get("jm_token") || {}).scope || "(not recorded)"}`,
+    `Secure page: ${window.isSecureContext} · DRM check: ${drmResult} · browser playback errors: ${playback.errors}${playback.browserOk ? " · browser has played OK" : ""}`,
+    `Start method per device: ${JSON.stringify(store.get("jm_methods", {}))}`];
   try {
     const devices = await playback.listDevices();
     lines.push("Devices:", ...devices.map((d) => `  ${d.name} | ${d.type} | ${d.is_active ? "active" : "idle"}${d.is_restricted ? " | restricted" : ""}${d.id === playback.browserDeviceId ? " | this browser" : ""}${d.id === playback.chosenId || (playback.chosenId === "browser" && d.id === playback.browserDeviceId) ? " | chosen" : ""}`));
@@ -957,7 +1038,8 @@ async function refreshDevices() {
     // This browser gets a new id every visit, so it's saved as "browser".
     const value = (d) => (d.id === playback.browserDeviceId ? "browser" : d.id);
     for (const d of devices) {
-      const label = d.id === playback.browserDeviceId ? "This browser (Jukemonster)" : `${d.name} (${d.type})`;
+      const label = d.id !== playback.browserDeviceId ? `${d.name} (${d.type})`
+        : playback.browserBad ? "This browser (can't play here)" : "This browser (Jukemonster)";
       select.append(new Option(label + (d.is_active ? " · active" : ""), value(d)));
     }
     select.value = value(playback.pick(devices));

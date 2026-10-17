@@ -27,6 +27,10 @@ In the [Spotify developer dashboard](https://developer.spotify.com/dashboard), o
 
 Under **APIs used**, tick both **Web API** and **Web Playback SDK** (the second lets music play straight in the browser tab).
 
+Songs are started from their playlist (or album), because since autumn 2026 some Spotify apps answer "OK" to a bare song and then play nothing. The app remembers which way works on each device.
+
+Playing in the browser needs protected content (DRM) turned on. In Firefox: Settings › General › tick "Play DRM-controlled content". Chrome and Edge have it on by default.
+
 If music doesn't start, press **Copy details for troubleshooting** in the app. It copies the device list and the last playback steps (no passwords or keys).
 
 Spotify's rules for hobby ("Development mode") apps, as of 2026:
