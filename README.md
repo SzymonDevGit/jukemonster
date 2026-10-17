@@ -25,6 +25,10 @@ In the [Spotify developer dashboard](https://developer.spotify.com/dashboard), o
 - `http://127.0.0.1:8000/` for running it on your own PC
 - `https://jukemonster.szy.monster/` for the live site
 
+Under **APIs used**, tick both **Web API** and **Web Playback SDK** (the second lets music play straight in the browser tab).
+
+If music doesn't start, press **Copy details for troubleshooting** in the app. It copies the device list and the last playback steps (no passwords or keys).
+
 Spotify's rules for hobby ("Development mode") apps, as of 2026:
 
 - The app owner needs Spotify Premium, and playing songs needs Premium.

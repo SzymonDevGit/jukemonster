@@ -125,6 +125,7 @@ function saveToken(data) {
   const token = {
     access: data.access_token,
     refresh: data.refresh_token || (store.get("jm_token") || {}).refresh,
+    scope: data.scope || (store.get("jm_token") || {}).scope || "",
     expires: Date.now() + (data.expires_in - 60) * 1000,
   };
   store.set("jm_token", token);
@@ -337,14 +338,26 @@ function randomStart(card) {
 // ---------------------------------------------------------------------
 // Playback: this browser (Web Playback SDK) or any Spotify app you own
 // ---------------------------------------------------------------------
+// Thrown inside play() when pause() or a newer play() has taken over.
+class Superseded extends Error {}
+
+// Rate limits and sign-in problems stop everything; anything else is worth another try.
+function softFail(err) {
+  if (err instanceof Superseded || [401, 429].includes(err.status)) throw err;
+  return null;
+}
+
 const playback = {
   player: null,
   browserDeviceId: null,
-  chosenId: store.get("jm_device", ""),
+  chosenId: store.get("jm_device", ""), // a device id, "browser", or "" for automatic
   lastDevice: null,
+  lastName: "",
   snippetTimer: null,
-  snippetToken: 0,
-  pauses: 0,         // bumped by pause(), so a start that loses a race with Reveal stops itself
+  endTimer: null,
+  gen: 0,            // bumped by every play() and pause(), so an older start notices and stops
+  activePlay: null,  // gen of the play() that should be making sound, null after pause()
+  late: 0,           // how far past its start point the last song already was when confirmed
 
   async listDevices() {
     const data = await api("/me/player/devices");
@@ -357,7 +370,8 @@ const playback = {
 
   // The device the user picked, else this browser, else whichever is active.
   pick(devices) {
-    return devices.find((d) => d.id === this.chosenId)
+    const chosen = this.chosenId === "browser" ? this.browserDeviceId : this.chosenId;
+    return devices.find((d) => d.id === chosen)
       || devices.find((d) => d.id === this.browserDeviceId)
       || devices.find((d) => d.is_active)
       || devices[0];
@@ -377,115 +391,203 @@ const playback = {
     return !!this.player && this.lastDevice === this.browserDeviceId;
   },
 
+  check(gen) {
+    if (gen !== this.gen) throw new Superseded();
+  },
+
   // Makes `id` the active device. Idle desktop/phone apps often ignore a play
   // command until playback has been moved to them.
   async transfer(id) {
     await api("/me/player", { method: "PUT", body: { device_ids: [id], play: false } });
   },
 
-  // Spotify can answer "OK" while the device stays silent, so check it really started.
-  async confirmStarted(id, card, timeout) {
+  // A sleeping Spotify app takes a couple of seconds to wake after a transfer.
+  async waitActive(id, gen, timeout = 3000) {
     const start = performance.now();
-    const local = id === this.browserDeviceId && !!this.player;
     while (performance.now() - start < timeout) {
-      // Checking this browser is instant, so look often: short snippets start their timer from here.
-      await sleep(local ? 25 : 250);
-      if (local) {
-        const st = await this.player.getCurrentState().catch(() => null);
-        if (st && !st.paused && !st.loading && sameTrack(st.track_window && st.track_window.current_track, card)) return true;
-        continue;
-      }
-      const now = await api("/me/player").catch(() => null);
-      if (now && now.is_playing && sameTrack(now.item, card) && (!now.device || now.device.id === id)) return true;
+      await sleep(500);
+      this.check(gen);
+      const data = await api("/me/player/devices").catch(softFail);
+      if (data && (data.devices || []).some((d) => d.id === id && d.is_active)) return true;
     }
+    debug(`device still idle after ${timeout} ms`);
     return false;
   },
 
-  // Resolves true once the song is audibly playing, false if pause() was called meanwhile.
-  // Tries a few ways of starting it, because some Spotify apps ignore the plain one.
-  async play(card, startMs) {
-    this.cancelSnippet();
-    const pauses = this.pauses;
-    if (this.player) {
-      // Browsers only allow sound after a click; this unlocks it on mobile/Safari.
-      try { await this.player.activateElement(); } catch { /* ignore */ }
-    }
-    const d = await this.device();
-    const at = `device_id=${encodeURIComponent(d.id)}`;
-    const uri = `spotify:track:${card.track_id}`;
-    const attempts = [
-      { name: "song", body: { uris: [uri], position_ms: startMs } },
-      { name: "song then seek", body: { uris: [uri] }, seek: true, transfer: true },
-    ];
-    if (card.playlist) {
-      attempts.push({ name: "from playlist", body: { context_uri: `spotify:playlist:${card.playlist}`, offset: { uri }, position_ms: startMs }, transfer: true });
-    }
-    debug(`play "${card.title}" on ${d.name} (${d.id === this.browserDeviceId ? "this browser" : d.type}, ${d.is_active ? "active" : "idle"})`);
-    try {
-      if (!d.is_active) {
-        await this.transfer(d.id).catch(() => {}); // best effort; the play call reports real problems
-        await sleep(400);
-      }
-      let started = false;
-      for (const a of attempts) {
-        if (a.transfer) {
-          await this.transfer(d.id).catch(() => {});
-          await sleep(600);
+  async nowPlaying() {
+    return api("/me/player").catch(softFail);
+  },
+
+  // Spotify can answer "OK" while the device stays silent, so wait until it really
+  // plays. Resolves how far past startMs the song already is, or null if it never started.
+  async confirmStarted(id, card, startMs, gen, timeout) {
+    const start = performance.now();
+    const local = id === this.browserDeviceId && !!this.player;
+    let prev = null;
+    while (performance.now() - start < timeout) {
+      // Checking this browser is instant, so look often: short snippets start their timer from here.
+      await sleep(local ? 25 : 500);
+      this.check(gen);
+      if (local) {
+        const st = await this.player.getCurrentState().catch(() => null);
+        if (st && !st.paused && !st.loading && sameTrack(st.track_window && st.track_window.current_track, card)) {
+          return Math.max(0, (st.position || 0) - startMs);
         }
-        await api(`/me/player/play?${at}`, { method: "PUT", body: a.body });
+        continue;
+      }
+      const now = await this.nowPlaying();
+      this.check(gen);
+      if (!playingOn(now, id, card)) { prev = null; continue; }
+      // "Playing" can be reported before any sound, so wait for the position to move.
+      const pos = now.progress_ms || 0;
+      if ((prev !== null && pos > prev) || pos > startMs + 150) return Math.max(0, pos - startMs);
+      prev = pos;
+    }
+    return null;
+  },
+
+  // Resolves true once the song is audibly playing, false if pause() or another
+  // play() took over meanwhile. Tries a few ways of starting it, because some
+  // Spotify apps ignore the plain one. `note` gets progress messages for slow starts.
+  async play(card, startMs, note = () => {}) {
+    const gen = ++this.gen;
+    this.activePlay = gen;
+    clearTimeout(this.snippetTimer);
+    clearTimeout(this.endTimer);
+    this.late = 0;
+    let d = null;
+    let sent = false;
+    try {
+      if (this.player) {
+        // Browsers only allow sound after a click; this unlocks it on mobile/Safari.
+        try { await this.player.activateElement(); } catch { /* ignore */ }
+      }
+      d = await this.device();
+      this.check(gen);
+      const local = d.id === this.browserDeviceId;
+      const at = `device_id=${encodeURIComponent(d.id)}`;
+      const uri = `spotify:track:${card.track_id}`;
+      if (card.duration_ms) startMs = Math.max(0, Math.min(startMs, card.duration_ms - 5000));
+      const attempts = [
+        { name: "song", body: { uris: [uri], position_ms: startMs } },
+        { name: "song then seek", body: { uris: [uri] }, seek: true, transfer: true },
+      ];
+      if (card.playlist) {
+        attempts.push({ name: "from playlist", body: { context_uri: `spotify:playlist:${card.playlist}`, offset: { uri }, position_ms: startMs }, transfer: true, context: true });
+      }
+      debug(`play "${card.title}" on ${d.name} (${local ? "this browser" : d.type}, ${d.is_active ? "active" : "idle"})`);
+
+      if (!d.is_active) {
+        if (!local) note(`Waking up ${d.name}...`);
+        await this.transfer(d.id).catch(softFail); // best effort; the play call reports real problems
+        this.check(gen);
+        if (local) await sleep(300);
+        else await this.waitActive(d.id, gen);
+      }
+
+      let late = null;
+      let used = null;
+      let lastErr = null;
+      for (const [i, a] of attempts.entries()) {
+        if (i > 0) {
+          // A slow device may have started after all; don't restart a song that's already going.
+          const now = await this.nowPlaying();
+          this.check(gen);
+          if (playingOn(now, d.id, card)) {
+            late = Math.max(0, (now.progress_ms || 0) - startMs);
+            used = attempts[i - 1];
+            break;
+          }
+          note("Still starting, trying another way...");
+        }
+        if (a.transfer) {
+          await this.transfer(d.id).catch(softFail);
+          this.check(gen);
+          await sleep(600);
+          this.check(gen);
+        }
+        this.lastDevice = d.id;
+        this.lastName = local ? "this browser" : `"${d.name}"`;
+        sent = true;
+        try {
+          await api(`/me/player/play?${at}`, { method: "PUT", body: a.body });
+        } catch (err) {
+          if ([401, 403, 429].includes(err.status)) throw err;
+          lastErr = err;
+          this.check(gen);
+          continue;
+        }
+        this.check(gen);
         if (a.seek) {
           await sleep(400);
-          await api(`/me/player/seek?position_ms=${startMs}&${at}`, { method: "PUT" }).catch(() => {});
+          this.check(gen);
+          await api(`/me/player/seek?position_ms=${startMs}&${at}`, { method: "PUT" }).catch(softFail);
         }
-        if (await this.confirmStarted(d.id, card, 3500)) { started = true; break; }
+        const wait = local ? 3500 : i === 0 && !d.is_active ? 6000 : 4000;
+        late = await this.confirmStarted(d.id, card, startMs, gen, wait);
+        if (late !== null) { used = a; break; }
         debug(`"${a.name}" didn't start`);
       }
-      if (!started) {
-        const now = await api("/me/player").catch(() => null);
+
+      if (late === null) {
+        const now = await this.nowPlaying();
         const seen = !now ? "Spotify shows nothing playing anywhere."
           : `Spotify shows ${now.device ? `"${now.device.name}"` : "a device"} ${now.is_playing ? "playing" : "stopped"}${now.item ? ` with "${now.item.name}"` : " with no song loaded"}.`;
         debug(`gave up. ${seen}`);
-        throw new Error(d.id === this.browserDeviceId
+        // Make sure a late start doesn't surprise anyone after we've said it failed.
+        await this.stop(d.id);
+        if (lastErr && lastErr.status === 404) throw lastErr;
+        throw new Error(local
           ? `This browser didn't start "${card.title}". ${seen} Click anywhere on the page and try again, or pick your Spotify app under Play on.`
           : `"${d.name}" didn't start "${card.title}". ${seen} Try again, or pick "This browser" under Play on.`);
       }
+      debug(`playing (${used.name}), ${late} ms in`);
+      if (used.context && card.duration_ms) {
+        // A playlist would carry on to its next song (a spoiler), so stop just before the end.
+        const left = card.duration_ms - startMs - late - 1500;
+        this.endTimer = setTimeout(() => { if (gen === this.gen) this.pause(); }, Math.max(0, left));
+      }
+      this.late = late;
+      return true;
     } catch (err) {
+      if (err instanceof Superseded || gen !== this.gen) {
+        // Paused while starting: the play command may have landed after the pause, so pause again.
+        if (sent && this.activePlay === null) await this.stop(d.id);
+        return false;
+      }
       if (err.status === 403) throw new Error(`Spotify refused to play (${err.message}). Playing songs needs Spotify Premium.`);
-      if (err.status === 404) throw new Error(`Spotify can't reach "${d.name}" right now. Open Spotify there and press ↻ in Setup, or pick another device.`);
+      if (err.status === 404) throw new Error(`Spotify can't reach "${d ? d.name : "your device"}" right now. Open Spotify there and press ↻ in Setup, or pick another device.`);
       throw err;
     }
-    this.lastDevice = d.id;
-    if (pauses !== this.pauses) {
-      await this.pause();
-      return false;
-    }
+  },
+
+  // Plays exactly `ms` of a song. play() only returns once the music has started
+  // and says how much has already played, so the timer allows for that.
+  async snippet(card, startMs, ms, onStart, note) {
+    if (!(await this.play(card, startMs, note))) return false;
+    const gen = this.gen;
+    if (onStart) onStart();
+    this.snippetTimer = setTimeout(() => {
+      if (gen === this.gen) this.pause();
+    }, Math.max(0, ms - this.late));
     return true;
   },
 
-  // Plays exactly `ms` of a song. play() only returns once the music has started,
-  // so the timer begins with the sound. Other devices report a little late, so
-  // short snippets are tightest in this browser.
-  async snippet(card, startMs, ms, onStart) {
-    if (!(await this.play(card, startMs))) return;
-    const token = ++this.snippetToken;
-    if (onStart) onStart();
-    this.snippetTimer = setTimeout(() => {
-      if (token === this.snippetToken) this.pause();
-    }, ms);
-  },
-
-  cancelSnippet() {
-    this.snippetToken++;
-    clearTimeout(this.snippetTimer);
+  // Pauses one device without touching the play/pause bookkeeping.
+  async stop(id) {
+    if (this.player && id === this.browserDeviceId) {
+      try { await this.player.pause(); return; } catch { /* fall back to the API */ }
+    }
+    try { await api(`/me/player/pause?device_id=${encodeURIComponent(id)}`, { method: "PUT" }); } catch { /* already paused */ }
   },
 
   async pause() {
-    this.pauses++;
-    this.cancelSnippet();
-    if (this.inBrowser()) {
-      try { await this.player.pause(); return; } catch { /* fall back to the API */ }
-    }
-    try { await api("/me/player/pause", { method: "PUT" }); } catch { /* already paused */ }
+    this.gen++;
+    this.activePlay = null;
+    clearTimeout(this.snippetTimer);
+    clearTimeout(this.endTimer);
+    // Nothing of ours has played yet, so leave whatever else is playing alone.
+    if (this.lastDevice) await this.stop(this.lastDevice);
   },
 };
 
@@ -497,10 +599,15 @@ function sameTrack(t, card) {
     || (t.linked_from && t.linked_from.id === card.track_id) || (!!t.name && t.name === card.title);
 }
 
+function playingOn(now, id, card) {
+  return !!now && now.is_playing && !!now.device && now.device.id === id && sameTrack(now.item, card);
+}
+
 // The SDK can finish loading before sign-in does, so start the player once both are done.
 let sdkLoaded = false;
 let signedIn = false;
 let playerStarted = false;
+let playerNote = "";
 
 window.onSpotifyWebPlaybackSDKReady = () => {
   sdkLoaded = true;
@@ -511,25 +618,32 @@ window.onSpotifyWebPlaybackSDKReady = () => {
 function startBrowserPlayer() {
   if (!sdkLoaded || !signedIn || playerStarted) return;
   playerStarted = true;
-  const player = new Spotify.Player({
-    name: "Jukemonster",
-    getOAuthToken: (cb) => accessToken().then(cb).catch(() => {}),
-    volume: 0.8,
-  });
-  player.addListener("ready", ({ device_id }) => {
-    debug("browser player ready");
-    playback.browserDeviceId = device_id;
-    playback.player = player;
-    refreshDevices();
-  });
-  player.addListener("not_ready", () => { debug("browser player went offline"); playback.browserDeviceId = null; });
   const problem = (text) => {
     debug(`browser player problem: ${text}`);
+    playerNote = text;
     playback.player = null;
     playback.browserDeviceId = null;
     setStatus($("setup-status"), text, "warn");
     refreshDevices();
   };
+  const player = new Spotify.Player({
+    name: "Jukemonster",
+    getOAuthToken: (cb) => accessToken().then(cb).catch(() => problem("This browser couldn't sign in to play music. Sign out and sign in again, or pick your Spotify app under Play on.")),
+    volume: 0.8,
+  });
+  player.addListener("ready", ({ device_id }) => {
+    debug("browser player ready");
+    playerNote = "";
+    playback.browserDeviceId = device_id;
+    playback.player = player;
+    refreshDevices();
+  });
+  player.addListener("not_ready", () => {
+    debug("browser player went offline");
+    playback.player = null;
+    playback.browserDeviceId = null;
+    refreshDevices();
+  });
   player.addListener("account_error", () => problem("Playing in this browser needs Spotify Premium. You can still pick your Spotify app under Play on."));
   player.addListener("initialization_error", () => problem("This browser can't play Spotify music itself (it needs protected content turned on). Pick your Spotify app under Play on."));
   player.addListener("authentication_error", () => problem("This browser couldn't sign in to play music. Sign out and sign in again, or pick your Spotify app under Play on."));
@@ -538,17 +652,27 @@ function startBrowserPlayer() {
     setStatus($(game ? "play-status" : "setup-status"), `Spotify couldn't play that song (${message}).`, "err");
   });
   player.addListener("autoplay_failed", () => setStatus($(game ? "play-status" : "setup-status"), "The browser blocked sound. Click anywhere on the page, then press Replay.", "warn"));
-  player.connect().then((ok) => debug(`browser player connect: ${ok}`));
+  player.connect().then((ok) => {
+    debug(`browser player connect: ${ok}`);
+    if (!ok) problem("This browser couldn't start Spotify's player. Pick your Spotify app under Play on.");
+  });
+  setTimeout(() => {
+    if (!playback.browserDeviceId && !playerNote) {
+      playerNote = "still not ready after 12 s";
+      debug("browser player still not ready after 12 s");
+    }
+  }, 12000);
 }
 
 async function copyDetails(e) {
   e.preventDefault();
   const lines = ["Jukemonster details (no passwords or keys)", `Browser: ${navigator.userAgent}`,
-    `Browser player: ${playback.browserDeviceId ? "ready" : sdkLoaded ? "script loaded, not ready" : "script not loaded"}`,
-    `Chosen device: ${playback.chosenId || "(automatic)"}`];
+    `Browser player: ${playback.browserDeviceId ? "ready" : sdkLoaded ? `script loaded, not ready${playerNote ? ` (${playerNote})` : ""}` : "script not loaded"}`,
+    `Chosen device: ${playback.chosenId || "(automatic)"}`,
+    `Permissions: ${(store.get("jm_token") || {}).scope || "(not recorded)"}`];
   try {
     const devices = await playback.listDevices();
-    lines.push("Devices:", ...devices.map((d) => `  ${d.name} | ${d.type} | ${d.is_active ? "active" : "idle"}${d.is_restricted ? " | restricted" : ""}${d.id === playback.browserDeviceId ? " | this browser" : ""}${d.id === playback.chosenId ? " | chosen" : ""}`));
+    lines.push("Devices:", ...devices.map((d) => `  ${d.name} | ${d.type} | ${d.is_active ? "active" : "idle"}${d.is_restricted ? " | restricted" : ""}${d.id === playback.browserDeviceId ? " | this browser" : ""}${d.id === playback.chosenId || (playback.chosenId === "browser" && d.id === playback.browserDeviceId) ? " | chosen" : ""}`));
   } catch (err) {
     lines.push(`Devices: couldn't list (${err.message})`);
   }
@@ -582,7 +706,6 @@ const state = {
   playlists: null,       // allowed playlists, once fetched
   loads: new Map(),      // playlist id -> { status: "loading" | "ok" | "err", cards, error }
   heard: false,
-  busy: false,
 };
 
 function saveSetup() {
@@ -640,12 +763,6 @@ function setStatus(el, text, kind = "") {
   el.textContent = text;
   el.classList.remove("ok", "warn", "err");
   if (kind) el.classList.add(kind);
-}
-
-async function runBusy(fn) {
-  if (state.busy) return;
-  state.busy = true;
-  try { await fn(); } finally { state.busy = false; }
 }
 
 function showScreen(id) {
@@ -837,11 +954,13 @@ async function refreshDevices() {
       select.append(new Option("No devices: open Spotify somewhere, then press ↻", ""));
       return;
     }
+    // This browser gets a new id every visit, so it's saved as "browser".
+    const value = (d) => (d.id === playback.browserDeviceId ? "browser" : d.id);
     for (const d of devices) {
       const label = d.id === playback.browserDeviceId ? "This browser (Jukemonster)" : `${d.name} (${d.type})`;
-      select.append(new Option(label + (d.is_active ? " · active" : ""), d.id));
+      select.append(new Option(label + (d.is_active ? " · active" : ""), value(d)));
     }
-    select.value = playback.pick(devices).id;
+    select.value = value(playback.pick(devices));
   } catch {
     select.replaceChildren(new Option("Couldn't list devices", ""));
   }
@@ -898,21 +1017,21 @@ function updateStart() {
   $("test-btn").disabled = !anyLoaded;
 }
 
-function onTestAudio() {
+async function onTestAudio() {
   const pool = activeLoads().filter((l) => l && l.status === "ok").flatMap((l) => l.cards);
   if (!pool.length) return;
   const status = $("setup-status");
-  runBusy(async () => {
-    setStatus(status, "Starting a test song...");
-    try {
-      const sample = pool[Math.floor(Math.random() * pool.length)];
-      if (!(await playback.play(sample, randomStart(sample)))) return;
-      $("heard-btn").disabled = false;
-      setStatus(status, "Spotify says it's playing. Can you hear it? Press \"Heard it!\" if you do.");
-    } catch (err) {
-      setStatus(status, err.message, "err");
-    }
-  });
+  const note = (text) => setStatus(status, text);
+  $("heard-btn").disabled = true;
+  note("Starting a test song...");
+  try {
+    const sample = pool[Math.floor(Math.random() * pool.length)];
+    if (!(await playback.play(sample, randomStart(sample), note))) return;
+    $("heard-btn").disabled = false;
+    setStatus(status, `"${sample.title}" is playing on ${playback.lastName}. Can you hear it? Press "Heard it!" if you do.`);
+  } catch (err) {
+    setStatus(status, err.message, "err");
+  }
 }
 
 function onHeardIt() {
@@ -1022,20 +1141,18 @@ function ensureCard() {
   return true;
 }
 
-function playFull() {
+async function playFull() {
   const card = game.current;
-  runBusy(async () => {
-    setStatus($("play-status"), "Starting the music...");
-    try {
-      if (await playback.play(card, card.start)) {
-        game.barStart = performance.now();
-        game.barMs = FULL_PLAY_MS;
-      }
-      setStatus($("play-status"), "");
-    } catch (err) {
-      setStatus($("play-status"), err.message, "err");
-    }
-  });
+  const note = (text) => setStatus($("play-status"), text);
+  note("Starting the music...");
+  try {
+    if (!(await playback.play(card, card.start, note))) return;
+    game.barStart = performance.now() - playback.late;
+    game.barMs = FULL_PLAY_MS;
+    note("");
+  } catch (err) {
+    setStatus($("play-status"), err.message, "err");
+  }
 }
 
 function onPlayCard() {
@@ -1050,23 +1167,18 @@ function onSnippet(levelIndex) {
   const card = game.current;
   const ms = LEVELS[levelIndex].ms;
   game.barStart = null;
-  runBusy(async () => {
-    setStatus($("play-status"), "Starting the music...");
-    try {
-      await playback.snippet(card, card.start, ms, () => {
-        // Only unlock the next snippet once this one is actually heard.
-        if (game.current === card) {
-          game.level = Math.max(game.level, levelIndex + 1);
-          renderGame();
-        }
-        game.barStart = performance.now();
-        game.barMs = ms;
-      });
-      setStatus($("play-status"), "");
-    } catch (err) {
-      setStatus($("play-status"), err.message, "err");
+  const note = (text) => setStatus($("play-status"), text);
+  note("Starting the music...");
+  playback.snippet(card, card.start, ms, () => {
+    // Only unlock the next snippet once this one is actually heard.
+    if (game.current === card) {
+      game.level = Math.max(game.level, levelIndex + 1);
+      renderGame();
     }
-  });
+    game.barStart = performance.now() - playback.late;
+    game.barMs = ms;
+    note("");
+  }, note).catch((err) => setStatus($("play-status"), err.message, "err"));
 }
 
 function reveal(result = null) {
@@ -1075,6 +1187,7 @@ function reveal(result = null) {
   game.result = result;
   game.barStart = null;
   playback.pause();
+  setStatus($("play-status"), "");
   renderGame();
 }
 
@@ -1439,6 +1552,11 @@ function wire() {
   $("device-select").addEventListener("change", (e) => {
     playback.chosenId = e.target.value;
     store.set("jm_device", playback.chosenId);
+    playback.pause();
+    state.heard = false;
+    $("heard-btn").disabled = true;
+    setStatus($("setup-status"), "Press Test Audio to check this device.");
+    updateStart();
   });
 
   $("opt-mix").addEventListener("change", (e) => { state.mix = e.target.checked; saveSetup(); });
@@ -1478,6 +1596,10 @@ async function main() {
   }
   renderSetup();
   showScreen("screen-setup");
+  const granted = ((store.get("jm_token") || {}).scope || "").split(" ");
+  if (granted[0] && SCOPES.split(" ").some((s) => !granted.includes(s))) {
+    setStatus($("setup-status"), "Jukemonster needs more Spotify permissions to play music. Please sign out and sign in again.", "warn");
+  }
   signedIn = true;
   startBrowserPlayer();
   refreshDevices();
