@@ -4,20 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jukemonster</title>
-  <meta name="description" content="A one-screen Hitster-style music timeline game. Everyone brings a Spotify playlist; Jukemonster is the jukebox.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23080808'/%3E%3Ccircle cx='32' cy='32' r='10' fill='%23c6893d'/%3E%3Ccircle cx='32' cy='32' r='3' fill='%23100c0a'/%3E%3C/svg%3E">
+  <meta name="description" content="A one-screen music party game. Everyone brings a Spotify playlist; Jukemonster is the jukebox.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 40'%3E%3Crect width='64' height='40' rx='6' fill='%233a332c'/%3E%3Crect x='6' y='5' width='52' height='12' rx='2' fill='%23fffaf0'/%3E%3Crect x='6' y='14' width='52' height='3' fill='%23e5642b'/%3E%3Ccircle cx='20' cy='27' r='6' fill='%23fffaf0'/%3E%3Ccircle cx='44' cy='27' r='6' fill='%23fffaf0'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Space+Mono:wght@400;700&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div class="stripes"></div>
   <div id="fade"></div>
 
   <!-- Login -->
-  <section id="screen-login" class="screen">
+  <section id="screen-login" class="screen hidden">
     <div class="center-col">
-      <h1 class="logo bob">JUKEMONSTER</h1>
-      <p class="sub">Everyone brings a playlist. This is just the jukebox.</p>
-      <div class="vinyl big spin"></div>
-      <button id="login-btn" class="btn filled wide">Sign in with Spotify</button>
+      <h1 class="logo">Jukemonster</h1>
+      <p class="sub">Everyone brings a playlist. This is the jukebox.</p>
+      <div class="cassette big spin-reels"><div class="label">Party mix ★</div><div class="reels"><i></i><i></i></div></div>
+      <button id="login-btn" class="btn primary wide">Sign in with Spotify</button>
       <p class="muted small">Needs Spotify Premium. Your login stays in this browser only.</p>
       <p id="login-status" class="status"></p>
     </div>
@@ -26,85 +30,122 @@
   <!-- Setup -->
   <section id="screen-setup" class="screen hidden">
     <header class="setup-head">
-      <h1 class="logo bob">JUKEMONSTER</h1>
-      <p class="sub">Everyone brings a playlist. This is just the jukebox.</p>
+      <h1 class="logo">Jukemonster</h1>
       <p class="muted small">Signed in as <span id="user-name">...</span> · <a href="#" id="logout-link">Sign out</a></p>
     </header>
 
     <div class="panel">
-      <div class="row">
+      <h2 class="step"><span>1</span>Who's playing?</h2>
+      <div class="seg big-seg">
+        <button id="pick-solo" class="btn">Solo</button>
+        <button id="pick-multi" class="btn">Multiplayer</button>
+      </div>
+    </div>
+
+    <div id="step-mode" class="panel hidden">
+      <h2 class="step"><span>2</span>Pick a game</h2>
+      <div id="mode-list" class="modes"></div>
+    </div>
+
+    <div id="step-players" class="panel hidden">
+      <h2 class="step"><span>3</span><span id="players-title">Players and playlists</span></h2>
+      <div id="count-row" class="row">
         <span class="label">Players</span>
         <div id="player-count" class="seg"></div>
       </div>
       <div id="player-rows"></div>
-
-      <div class="row actions">
-        <button id="load-btn" class="btn filled">Load Playlists</button>
-        <button id="test-btn" class="btn" disabled>Test Audio</button>
-        <button id="heard-btn" class="btn" disabled>Heard it!</button>
-      </div>
+      <p class="muted small">Only playlists you own or collaborate on are listed, because that's all Spotify lets this app read. <a href="#" id="reload-playlists">Refresh list</a></p>
       <div class="row">
         <span class="label">Play on</span>
-        <select id="device-select"><option value="">Looking for devices...</option></select>
-        <button id="refresh-devices" class="btn small-btn" title="Look for Spotify devices again">↻</button>
+        <select id="device-select" aria-label="Spotify device"><option value="">Looking for devices...</option></select>
+        <button id="refresh-devices" class="btn tiny" title="Look for Spotify devices again" aria-label="Look for Spotify devices again">↻</button>
+      </div>
+      <div class="row">
+        <button id="test-btn" class="btn" disabled>Test Audio</button>
+        <button id="heard-btn" class="btn" disabled>Heard it!</button>
       </div>
       <p id="setup-status" class="status"></p>
     </div>
 
-    <div class="panel">
-      <span class="label">Options</span>
-      <label class="check"><input type="checkbox" id="opt-mix"><span></span>Mix all playlists together</label>
-      <label class="check"><input type="checkbox" id="opt-months"><span></span>Include months</label>
-      <label class="check"><input type="checkbox" id="opt-reduce"><span></span>Reduce same year (max 3 per year)</label>
-      <div class="seg modes">
-        <button id="mode-popular" class="btn toggle active" disabled>Most Popular</button>
-        <button id="mode-recent" class="btn toggle" disabled>Most Recently Added</button>
+    <div id="step-options" class="panel hidden">
+      <h2 class="step"><span>4</span>Options</h2>
+      <div id="length-row" class="row">
+        <span id="length-label" class="label">Rounds</span>
+        <div id="length-seg" class="seg"></div>
+      </div>
+      <label class="check" id="mix-row"><input type="checkbox" id="opt-mix"><span></span>Mix all playlists together</label>
+      <label class="check"><input type="checkbox" id="opt-months"><span></span>Show months on cards</label>
+      <label class="check"><input type="checkbox" id="opt-reduce"><span></span>Max 3 songs per year</label>
+      <div class="seg indent">
+        <button id="mode-popular" class="btn toggle small-btn" disabled>Most popular</button>
+        <button id="mode-recent" class="btn toggle small-btn" disabled>Most recently added</button>
       </div>
     </div>
 
     <div class="center-col">
-      <button id="start-btn" class="btn filled big-btn" disabled>Start Game</button>
-      <p id="start-hint" class="muted small">Load playlists and confirm audio first.</p>
+      <button id="start-btn" class="btn primary big-btn" disabled>Start Game</button>
+      <p id="start-hint" class="muted small"></p>
     </div>
   </section>
 
   <!-- Play -->
-  <section id="screen-play" class="screen hidden">
+  <section id="screen-play" class="screen wide-screen hidden">
     <header class="topbar">
-      <span class="logo small-logo">JUKEMONSTER</span>
-      <span id="deck-label" class="sub"></span>
-      <button id="back-btn" class="btn small-btn">Setup</button>
+      <span class="logo small-logo">Jukemonster</span>
+      <span id="mode-name" class="mode-name"></span>
+      <span id="deck-label" class="deck-label"></span>
+      <button id="back-btn" class="btn tiny">Setup</button>
     </header>
 
-    <p class="sub center">Whose turn is it?</p>
-    <div id="turn-buttons" class="turns"></div>
+    <div id="scoreboard" class="scoreboard"></div>
 
-    <div class="card-wrap">
-      <div id="card" class="card">
-        <div class="face front">
-          <div id="card-empty" class="muted">Press "Play Card" to spin one up</div>
-          <div id="card-mystery" class="hidden">
-            <div class="vinyl spin"></div>
-            <div class="np">NOW PLAYING</div>
-            <div class="muted small">Place your card, then hit Reveal</div>
+    <div id="play-grid" class="play-grid">
+      <div class="stage">
+        <p id="turn-line" class="turn-line"></p>
+        <div id="ref-card" class="ref-card hidden">
+          <span class="ref-label">Last song</span>
+          <b id="ref-date"></b>
+          <span id="ref-title"></span>
+        </div>
+        <div class="card-wrap">
+          <div id="card" class="card">
+            <div class="face front">
+              <div id="card-empty" class="empty-text"></div>
+              <div id="card-mystery" class="hidden">
+                <div class="cassette spin-reels"><div class="label" id="tape-label">Mystery mix</div><div class="reels"><i></i><i></i></div></div>
+                <div class="np">NOW PLAYING</div>
+                <div id="card-hint" class="muted small"></div>
+              </div>
+            </div>
+            <div class="face back">
+              <div id="card-result" class="result"></div>
+              <div id="card-date" class="date"></div>
+              <div id="card-title" class="title"></div>
+              <div id="card-artist" class="artist"></div>
+              <div id="card-extra" class="extra"></div>
+            </div>
           </div>
         </div>
-        <div class="face back">
-          <div id="card-date" class="date"></div>
-          <div id="card-title" class="title"></div>
-          <div id="card-artist" class="artist"></div>
-        </div>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <div id="controls" class="controls"></div>
+        <p id="play-hint" class="muted small center"></p>
+        <p id="play-status" class="status center"></p>
+      </div>
+      <div id="timelines" class="timelines hidden"></div>
+    </div>
+  </section>
+
+  <!-- Game over -->
+  <section id="screen-end" class="screen hidden">
+    <div class="center-col">
+      <h1 class="logo">Game over!</h1>
+      <p id="end-sub" class="sub"></p>
+      <ol id="end-list" class="end-list"></ol>
+      <div class="row center">
+        <button id="again-btn" class="btn primary big-btn">Play again</button>
+        <button id="change-btn" class="btn big-btn">Change game</button>
       </div>
     </div>
-
-    <div class="bar"><div id="bar-fill"></div></div>
-
-    <div class="row center play-actions">
-      <button id="play-btn" class="btn filled big-btn">Play Card</button>
-      <button id="reveal-btn" class="btn big-btn" disabled>Reveal</button>
-      <button id="next-btn" class="btn filled big-btn hidden">Next Card</button>
-    </div>
-    <p id="play-status" class="status center"></p>
   </section>
 
   <footer class="foot muted small">Jukemonster by <a href="https://szy.monster/">szy.monster</a></footer>

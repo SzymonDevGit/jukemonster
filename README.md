@@ -1,19 +1,22 @@
 # Jukemonster
 
-A one-screen companion for Hitster-style music timeline games. Each player brings their own Spotify playlist, Jukemonster plays a mystery song from it, and you flip the card to check the year once everyone has placed their guess. You keep score with your own physical cards, exactly like the board game.
+A one-screen music party game. Each player picks one of their Spotify playlists, and Jukemonster is the jukebox.
 
 It is a plain static website (`index.html`, `style.css`, `app.js`). There is no server and no build step. Spotify sign-in uses the PKCE flow, so the Spotify **client secret is never needed and must never be added here**.
 
-## How to play
+## Games
 
-1. Sign in with Spotify (needs Premium).
-2. Pick how many players and paste each player's playlist link.
-3. Press **Load Playlists**, then **Test Audio**, and **Heard it!** once you hear music.
-4. Choose options (mix playlists, include months, max 3 songs per year), then **Start Game**.
-5. Pick whose turn it is, press **Play Card**, place your card, then **Reveal**.
-6. Press **Next Card** for the next player.
+Pick **Solo** or **Multiplayer** first, then a game:
 
-Music plays in the browser tab itself (desktop Chrome, Edge or Firefox), or on any Spotify app you have open, picked under **Play on**.
+| Game | Solo | Multiplayer | How it works |
+| --- | :-: | :-: | --- |
+| Classic | | ✓ | The app plays a song; you place your own physical Hitster-style cards and press Reveal. |
+| Guess the Song | ✓ | ✓ | Listen to 0.5, 1, 5 or 30 seconds (each unlocks after the last). 4, 3, 2 or 1 points for a right answer. Set the number of rounds. |
+| Timeline | ✓ | ✓ | Place each song in your on-screen timeline. Everyone's timeline is shown. First to 10 cards wins; solo ends after 3 wrong placements. |
+| Whose Playlist? | | ✓ (3+) | Guess which other player's playlist the song is from. |
+| Older or Newer | ✓ | ✓ | Is the song older or newer than the last one? Same year counts as right. Solo is a streak until your first miss. |
+
+Before starting, press **Test Audio** and **Heard it!** to check sound. Music plays in the browser tab itself (desktop Chrome, Edge or Firefox), or on any Spotify app you have open, picked under **Play on**. Short snippets are most accurate when playing in the browser tab.
 
 ## Spotify app settings
 
@@ -26,7 +29,7 @@ Spotify's rules for hobby ("Development mode") apps, as of 2026:
 
 - The app owner needs Spotify Premium, and playing songs needs Premium.
 - Only people added under **User Management** in the dashboard can sign in.
-- The app can only read playlists the signed-in person **owns or collaborates on**. For a friend's playlist, ask them to invite you as a collaborator, or copy its songs into a playlist of your own.
+- The app can only read playlists the signed-in person **owns or collaborates on**, so only those are listed. For a friend's playlist, ask them to invite you as a collaborator, or copy its songs into a playlist of your own.
 - Spotify no longer shares song popularity, so "Most Popular" is greyed out and "Most Recently Added" is used.
 
 ## Run it on your PC
