@@ -176,6 +176,13 @@ function logout() {
 // ---------------------------------------------------------------------
 // Spotify Web API
 // ---------------------------------------------------------------------
+// Recent playback calls and player events, for the "Copy details" link.
+const debugLog = [];
+function debug(line) {
+  debugLog.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
+  if (debugLog.length > 80) debugLog.shift();
+}
+
 class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -196,11 +203,19 @@ async function api(path, { method = "GET", body } = {}, retried = false) {
     store.set("jm_token", token);
     return api(path, { method, body }, true);
   }
-  if (res.status === 429) throw new ApiError(429, "Spotify is rate-limiting requests right now. Wait a bit and try again.");
+  const logIt = url.includes("/me/player") && !(method === "GET" && url.endsWith("/me/player"));
+  const short = url.replace("https://api.spotify.com/v1", "") + (body ? " " + JSON.stringify(body) : "");
+  if (res.status === 429) {
+    if (logIt) debug(`${method} ${short} -> 429`);
+    throw new ApiError(429, "Spotify is rate-limiting requests right now. Wait a bit and try again.");
+  }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, (data.error && data.error.message) || `Spotify request failed (${res.status})`);
+    const message = (data.error && data.error.message) || `Spotify request failed (${res.status})`;
+    if (logIt) debug(`${method} ${short} -> ${res.status} ${message}`);
+    throw new ApiError(res.status, message);
   }
+  if (logIt) debug(`${method} ${short} -> ${res.status}`);
   if (res.status === 204) return null;
   const text = await res.text();
   return text ? JSON.parse(text) : null;
@@ -270,7 +285,7 @@ async function firstPlaylistPage(id) {
 async function fetchPlaylistCards(id) {
   const cards = [];
   const seen = new Set();
-  let total = 0, noTrack = 0, noDate = 0;
+  let total = 0, noTrack = 0, noDate = 0, unplayable = 0;
 
   let page;
   try {
@@ -285,7 +300,8 @@ async function fetchPlaylistCards(id) {
     for (const entry of page.items || []) {
       total++;
       const t = entry.track || entry.item;
-      if (!t || !t.id || t.type === "episode") { noTrack++; continue; }
+      if (!t || !t.id || t.type === "episode" || t.is_local) { noTrack++; continue; }
+      if (t.is_playable === false) { unplayable++; continue; }
       const [year, month] = extractYearMonth((t.album || {}).release_date);
       if (year === null) { noDate++; continue; }
       if (seen.has(t.id)) continue;
@@ -306,7 +322,7 @@ async function fetchPlaylistCards(id) {
 
   if (!cards.length) {
     if (total === 0) throw new Error("That playlist is empty.");
-    throw new Error(`None of its ${total} songs had a usable release date (${noTrack} had no song data, ${noDate} had no date).`);
+    throw new Error(`None of its ${total} songs can be used (${unplayable} can't be played in your country, ${noTrack} aren't songs, ${noDate} have no date).`);
   }
   return cards;
 }
@@ -328,6 +344,7 @@ const playback = {
   lastDevice: null,
   snippetTimer: null,
   snippetToken: 0,
+  pauses: 0,         // bumped by pause(), so a start that loses a race with Reveal stops itself
 
   async listDevices() {
     const data = await api("/me/player/devices");
@@ -346,63 +363,115 @@ const playback = {
       || devices[0];
   },
 
-  async deviceId() {
+  async device() {
     const devices = await this.listDevices();
     if (!devices.length) {
-      throw new Error("No Spotify device found. Open Spotify on your phone or computer, play any song, then press ↻ in Setup.");
+      throw new Error("No Spotify device found. Open Spotify on your phone or computer, then press ↻ in Setup.");
     }
-    return this.pick(devices).id;
+    const d = this.pick(devices);
+    if (d.is_restricted) throw new Error(`Spotify doesn't let apps control "${d.name}". Pick another device in Setup.`);
+    return d;
   },
 
   inBrowser() {
     return !!this.player && this.lastDevice === this.browserDeviceId;
   },
 
-  async play(trackId, startMs) {
+  // Makes `id` the active device. Idle desktop/phone apps often ignore a play
+  // command until playback has been moved to them.
+  async transfer(id) {
+    await api("/me/player", { method: "PUT", body: { device_ids: [id], play: false } });
+  },
+
+  // Spotify can answer "OK" while the device stays silent, so check it really started.
+  async confirmStarted(id, card, timeout) {
+    const start = performance.now();
+    const local = id === this.browserDeviceId && !!this.player;
+    while (performance.now() - start < timeout) {
+      // Checking this browser is instant, so look often: short snippets start their timer from here.
+      await sleep(local ? 25 : 250);
+      if (local) {
+        const st = await this.player.getCurrentState().catch(() => null);
+        if (st && !st.paused && !st.loading && sameTrack(st.track_window && st.track_window.current_track, card)) return true;
+        continue;
+      }
+      const now = await api("/me/player").catch(() => null);
+      if (now && now.is_playing && sameTrack(now.item, card) && (!now.device || now.device.id === id)) return true;
+    }
+    return false;
+  },
+
+  // Resolves true once the song is audibly playing, false if pause() was called meanwhile.
+  // Tries a few ways of starting it, because some Spotify apps ignore the plain one.
+  async play(card, startMs) {
     this.cancelSnippet();
+    const pauses = this.pauses;
     if (this.player) {
       // Browsers only allow sound after a click; this unlocks it on mobile/Safari.
       try { await this.player.activateElement(); } catch { /* ignore */ }
     }
-    const id = await this.deviceId();
+    const d = await this.device();
+    const at = `device_id=${encodeURIComponent(d.id)}`;
+    const uri = `spotify:track:${card.track_id}`;
+    const attempts = [
+      { name: "song", body: { uris: [uri], position_ms: startMs } },
+      { name: "song then seek", body: { uris: [uri] }, seek: true, transfer: true },
+    ];
+    if (card.playlist) {
+      attempts.push({ name: "from playlist", body: { context_uri: `spotify:playlist:${card.playlist}`, offset: { uri }, position_ms: startMs }, transfer: true });
+    }
+    debug(`play "${card.title}" on ${d.name} (${d.id === this.browserDeviceId ? "this browser" : d.type}, ${d.is_active ? "active" : "idle"})`);
     try {
-      await api(`/me/player/play?device_id=${encodeURIComponent(id)}`, {
-        method: "PUT",
-        body: { uris: [`spotify:track:${trackId}`], position_ms: startMs },
-      });
+      if (!d.is_active) {
+        await this.transfer(d.id).catch(() => {}); // best effort; the play call reports real problems
+        await sleep(400);
+      }
+      let started = false;
+      for (const a of attempts) {
+        if (a.transfer) {
+          await this.transfer(d.id).catch(() => {});
+          await sleep(600);
+        }
+        await api(`/me/player/play?${at}`, { method: "PUT", body: a.body });
+        if (a.seek) {
+          await sleep(400);
+          await api(`/me/player/seek?position_ms=${startMs}&${at}`, { method: "PUT" }).catch(() => {});
+        }
+        if (await this.confirmStarted(d.id, card, 3500)) { started = true; break; }
+        debug(`"${a.name}" didn't start`);
+      }
+      if (!started) {
+        const now = await api("/me/player").catch(() => null);
+        const seen = !now ? "Spotify shows nothing playing anywhere."
+          : `Spotify shows ${now.device ? `"${now.device.name}"` : "a device"} ${now.is_playing ? "playing" : "stopped"}${now.item ? ` with "${now.item.name}"` : " with no song loaded"}.`;
+        debug(`gave up. ${seen}`);
+        throw new Error(d.id === this.browserDeviceId
+          ? `This browser didn't start "${card.title}". ${seen} Click anywhere on the page and try again, or pick your Spotify app under Play on.`
+          : `"${d.name}" didn't start "${card.title}". ${seen} Try again, or pick "This browser" under Play on.`);
+      }
     } catch (err) {
-      if (err.status === 403) throw new Error("Spotify refused to play. Playing songs needs Spotify Premium.");
-      if (err.status === 404) throw new Error("That Spotify device went to sleep. Open Spotify there and press ↻ in Setup, or pick another device.");
+      if (err.status === 403) throw new Error(`Spotify refused to play (${err.message}). Playing songs needs Spotify Premium.`);
+      if (err.status === 404) throw new Error(`Spotify can't reach "${d.name}" right now. Open Spotify there and press ↻ in Setup, or pick another device.`);
       throw err;
     }
-    this.lastDevice = id;
+    this.lastDevice = d.id;
+    if (pauses !== this.pauses) {
+      await this.pause();
+      return false;
+    }
+    return true;
   },
 
-  // Plays exactly `ms` of a song. Timing is tight in this browser; other
-  // devices take a moment to start, so short snippets are only approximate there.
-  async snippet(trackId, startMs, ms, onStart) {
+  // Plays exactly `ms` of a song. play() only returns once the music has started,
+  // so the timer begins with the sound. Other devices report a little late, so
+  // short snippets are tightest in this browser.
+  async snippet(card, startMs, ms, onStart) {
+    if (!(await this.play(card, startMs))) return;
     const token = ++this.snippetToken;
-    await this.play(trackId, startMs);
-    this.snippetToken = token; // play() cancels; claim the slot back
-    if (this.inBrowser()) await this.waitUntilPlaying(trackId, 4000);
-    else await sleep(600);
-    if (token !== this.snippetToken) return;
     if (onStart) onStart();
     this.snippetTimer = setTimeout(() => {
       if (token === this.snippetToken) this.pause();
     }, ms);
-  },
-
-  async waitUntilPlaying(trackId, timeout) {
-    const start = performance.now();
-    while (performance.now() - start < timeout) {
-      const s = await this.player.getCurrentState().catch(() => null);
-      if (s && !s.paused && !s.loading) {
-        const t = s.track_window && s.track_window.current_track;
-        if (!t || t.id === trackId || t.uri === `spotify:track:${trackId}` || (t.linked_from && t.linked_from.id === trackId)) return;
-      }
-      await sleep(30);
-    }
   },
 
   cancelSnippet() {
@@ -411,6 +480,7 @@ const playback = {
   },
 
   async pause() {
+    this.pauses++;
     this.cancelSnippet();
     if (this.inBrowser()) {
       try { await this.player.pause(); return; } catch { /* fall back to the API */ }
@@ -419,6 +489,14 @@ const playback = {
   },
 };
 
+// Spotify may swap in a regional copy of a song with a different id (and no
+// longer says so for hobby apps), so a matching title counts too.
+function sameTrack(t, card) {
+  if (!t) return false;
+  return t.id === card.track_id || t.uri === `spotify:track:${card.track_id}`
+    || (t.linked_from && t.linked_from.id === card.track_id) || (!!t.name && t.name === card.title);
+}
+
 // The SDK can finish loading before sign-in does, so start the player once both are done.
 let sdkLoaded = false;
 let signedIn = false;
@@ -426,6 +504,7 @@ let playerStarted = false;
 
 window.onSpotifyWebPlaybackSDKReady = () => {
   sdkLoaded = true;
+  debug("browser player script loaded");
   startBrowserPlayer();
 };
 
@@ -438,16 +517,49 @@ function startBrowserPlayer() {
     volume: 0.8,
   });
   player.addListener("ready", ({ device_id }) => {
+    debug("browser player ready");
     playback.browserDeviceId = device_id;
     playback.player = player;
     refreshDevices();
   });
-  player.addListener("not_ready", () => { playback.browserDeviceId = null; });
-  player.addListener("account_error", () => {
+  player.addListener("not_ready", () => { debug("browser player went offline"); playback.browserDeviceId = null; });
+  const problem = (text) => {
+    debug(`browser player problem: ${text}`);
     playback.player = null;
-    setStatus($("setup-status"), "Playing in this browser needs Spotify Premium. You can still pick another device.", "warn");
+    playback.browserDeviceId = null;
+    setStatus($("setup-status"), text, "warn");
+    refreshDevices();
+  };
+  player.addListener("account_error", () => problem("Playing in this browser needs Spotify Premium. You can still pick your Spotify app under Play on."));
+  player.addListener("initialization_error", () => problem("This browser can't play Spotify music itself (it needs protected content turned on). Pick your Spotify app under Play on."));
+  player.addListener("authentication_error", () => problem("This browser couldn't sign in to play music. Sign out and sign in again, or pick your Spotify app under Play on."));
+  player.addListener("playback_error", ({ message }) => {
+    debug(`browser playback error: ${message}`);
+    setStatus($(game ? "play-status" : "setup-status"), `Spotify couldn't play that song (${message}).`, "err");
   });
-  player.connect();
+  player.addListener("autoplay_failed", () => setStatus($(game ? "play-status" : "setup-status"), "The browser blocked sound. Click anywhere on the page, then press Replay.", "warn"));
+  player.connect().then((ok) => debug(`browser player connect: ${ok}`));
+}
+
+async function copyDetails(e) {
+  e.preventDefault();
+  const lines = ["Jukemonster details (no passwords or keys)", `Browser: ${navigator.userAgent}`,
+    `Browser player: ${playback.browserDeviceId ? "ready" : sdkLoaded ? "script loaded, not ready" : "script not loaded"}`,
+    `Chosen device: ${playback.chosenId || "(automatic)"}`];
+  try {
+    const devices = await playback.listDevices();
+    lines.push("Devices:", ...devices.map((d) => `  ${d.name} | ${d.type} | ${d.is_active ? "active" : "idle"}${d.is_restricted ? " | restricted" : ""}${d.id === playback.browserDeviceId ? " | this browser" : ""}${d.id === playback.chosenId ? " | chosen" : ""}`));
+  } catch (err) {
+    lines.push(`Devices: couldn't list (${err.message})`);
+  }
+  lines.push("Log:", ...debugLog.map((l) => "  " + l));
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    e.target.textContent = "Copied! Paste it in a message.";
+  } catch {
+    window.prompt("Copy these details:", text);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -687,6 +799,7 @@ async function loadPick(id) {
   renderRowInfo();
   try {
     const cards = await fetchPlaylistCards(id);
+    cards.forEach((c) => { c.playlist = id; });
     state.loads.set(id, { status: "ok", cards });
   } catch (err) {
     state.loads.set(id, { status: "err", error: err.message });
@@ -790,12 +903,12 @@ function onTestAudio() {
   if (!pool.length) return;
   const status = $("setup-status");
   runBusy(async () => {
-    setStatus(status, "Playing a test song... listen for it.");
+    setStatus(status, "Starting a test song...");
     try {
       const sample = pool[Math.floor(Math.random() * pool.length)];
-      await playback.play(sample.track_id, randomStart(sample));
+      if (!(await playback.play(sample, randomStart(sample)))) return;
       $("heard-btn").disabled = false;
-      setStatus(status, "Did you hear music? Press \"Heard it!\" once you do.");
+      setStatus(status, "Spotify says it's playing. Can you hear it? Press \"Heard it!\" if you do.");
     } catch (err) {
       setStatus(status, err.message, "err");
     }
@@ -912,10 +1025,12 @@ function ensureCard() {
 function playFull() {
   const card = game.current;
   runBusy(async () => {
+    setStatus($("play-status"), "Starting the music...");
     try {
-      await playback.play(card.track_id, card.start);
-      game.barStart = performance.now();
-      game.barMs = FULL_PLAY_MS;
+      if (await playback.play(card, card.start)) {
+        game.barStart = performance.now();
+        game.barMs = FULL_PLAY_MS;
+      }
       setStatus($("play-status"), "");
     } catch (err) {
       setStatus($("play-status"), err.message, "err");
@@ -931,14 +1046,19 @@ function onPlayCard() {
 
 function onSnippet(levelIndex) {
   if (!ensureCard()) return;
-  game.level = Math.max(game.level, levelIndex + 1);
   renderGame();
   const card = game.current;
   const ms = LEVELS[levelIndex].ms;
   game.barStart = null;
   runBusy(async () => {
+    setStatus($("play-status"), "Starting the music...");
     try {
-      await playback.snippet(card.track_id, card.start, ms, () => {
+      await playback.snippet(card, card.start, ms, () => {
+        // Only unlock the next snippet once this one is actually heard.
+        if (game.current === card) {
+          game.level = Math.max(game.level, levelIndex + 1);
+          renderGame();
+        }
         game.barStart = performance.now();
         game.barMs = ms;
       });
@@ -1315,6 +1435,7 @@ function wire() {
   $("test-btn").addEventListener("click", onTestAudio);
   $("heard-btn").addEventListener("click", onHeardIt);
   $("refresh-devices").addEventListener("click", refreshDevices);
+  document.querySelectorAll(".copy-debug").forEach((a) => a.addEventListener("click", copyDetails));
   $("device-select").addEventListener("change", (e) => {
     playback.chosenId = e.target.value;
     store.set("jm_device", playback.chosenId);
