@@ -351,8 +351,13 @@ function softFail(err) {
 // What to do when this browser can't play Spotify's protected audio.
 function browserHelp() {
   const firefox = /Firefox\//.test(navigator.userAgent);
+  const name = firefox ? "Firefox" : "This browser";
+  if (drmResult === "ok") {
+    // DRM is switched on, so the browser itself is fine; Spotify's player just won't work in it here.
+    return `${name} has protected content turned on, but Spotify's player still can't play in it on this computer. Open Jukemonster in ${firefox ? "Edge or Chrome" : "another browser (Chrome or Edge)"}, or open your Spotify app and pick it under Play on.`;
+  }
   return firefox
-    ? "Firefox isn't letting Spotify's protected music play. In Firefox Settings › General, tick \"Play DRM-controlled content\" and reload this page. Or pick your Spotify app under Play on, or use Chrome or Edge."
+    ? "Firefox isn't letting Spotify's protected music play. In Firefox Settings, tick \"Play DRM-controlled content\" and reload this page. Or open Jukemonster in Edge or Chrome, or pick your Spotify app under Play on."
     : "This browser isn't letting Spotify's protected music play. Turn on protected content (DRM) in its settings and reload, or pick your Spotify app under Play on.";
 }
 
