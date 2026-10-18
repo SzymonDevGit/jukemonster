@@ -40,6 +40,10 @@ Spotify's rules for hobby ("Development mode") apps, as of 2026:
 - The app can only read the songs of playlists the signed-in person **owns or collaborates on**. Saved playlists are listed too, and picking one explains how to copy it: open it in Spotify, press Ctrl+A, right-click › Add to playlist › New playlist.
 - Spotify no longer shares song popularity, so "Most Popular" is greyed out and "Most Recently Added" is used.
 
+## More than 5 people
+
+Spotify lets only 5 accounts sign in to an app in development mode (add them under **User Management** in the Spotify dashboard). Anyone else can host with their own free Spotify app: on the sign-in screen, open **Use your own Spotify app** and follow the steps there. The Client ID they paste is kept in their browser only.
+
 ## Default mode
 
 The **★ Jukemonster default** choice in every playlist picker lets anyone play without picking a playlist. Its songs are listed in `default-songs.json`: Spotify's most streamed songs of all time (907 of them, from kworb.net, October 2026). The first time someone uses it, the app looks each song up on Spotify (the game can start once 60 are found; the rest keep coming in) and remembers the results in that browser. Each song is started from its album, which anyone can play.

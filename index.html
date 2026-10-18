@@ -25,6 +25,18 @@
       <p class="muted small">Needs Spotify Premium. Your login stays in this browser only.</p>
       <p class="browser-note">Don't use Firefox or Zen for now: Spotify won't play songs there. Use Chrome or Edge, or play through the Spotify app.</p>
       <p id="login-status" class="status"></p>
+      <details id="own-app" class="own-app">
+        <summary>Use your own Spotify app</summary>
+        <p>Spotify lets only 5 people sign in to each app. To host with any account, make a free app of your own (needs Spotify Premium):</p>
+        <ol>
+          <li>Go to <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and press <b>Create app</b>.</li>
+          <li>Give it any name and description. Under <b>Redirect URIs</b>, add <code id="own-redirect"></code> and press Add.</li>
+          <li>Tick <b>Web API</b> and <b>Web Playback SDK</b>, agree to the terms and press <b>Save</b>.</li>
+          <li>Copy the app's <b>Client ID</b>, paste it here, press <b>Use it</b>, then sign in.</li>
+        </ol>
+        <div class="own-row"><input id="own-id" placeholder="Client ID" autocomplete="off" spellcheck="false" aria-label="Client ID"><button id="own-save" class="btn small-btn">Use it</button></div>
+        <p id="own-status" class="small muted"></p>
+      </details>
     </div>
   </section>
 

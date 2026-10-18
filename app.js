@@ -13,7 +13,12 @@
 "use strict";
 
 // The Client ID is public by design. Never put the client secret in this file.
-const CLIENT_ID = "a8509be20756492ca029547063dd8295";
+const DEFAULT_CLIENT_ID = "a8509be20756492ca029547063dd8295";
+// Spotify lets only 5 people sign in to an app in development mode, so a host can
+// use their own app's Client ID instead ("Use your own Spotify app" on the sign-in screen).
+const CLIENT_ID = (() => {
+  try { return JSON.parse(localStorage.getItem("jm_client_id")) || DEFAULT_CLIENT_ID; } catch { return DEFAULT_CLIENT_ID; }
+})();
 const SCOPES = [
   "playlist-read-private",
   "playlist-read-collaborative",
@@ -185,6 +190,37 @@ async function accessToken() {
 function logout() {
   store.remove("jm_token");
   location.reload();
+}
+
+// Switches to another Spotify app (or back to Jukemonster's when id is empty).
+// A sign-in belongs to one app, so it signs you out too.
+function setClientId(id) {
+  if (id) store.set("jm_client_id", id);
+  else store.remove("jm_client_id");
+  store.remove("jm_token");
+  location.reload();
+}
+
+function renderOwnApp() {
+  $("own-redirect").textContent = REDIRECT_URI;
+  const status = $("own-status");
+  status.textContent = "";
+  if (CLIENT_ID === DEFAULT_CLIENT_ID) return;
+  $("own-app").open = true;
+  $("own-id").value = CLIENT_ID;
+  const back = el("a", "", "Go back to Jukemonster's app");
+  back.href = "#";
+  back.addEventListener("click", (e) => { e.preventDefault(); setClientId(""); });
+  status.append(`Using your own Spotify app (…${CLIENT_ID.slice(-4)}). `, back);
+}
+
+function onOwnAppSave() {
+  const id = $("own-id").value.trim();
+  if (!/^[0-9a-f]{32}$/i.test(id)) {
+    $("own-status").textContent = "That doesn't look like a Client ID. It's 32 letters and numbers, shown on your app's page in the Spotify dashboard.";
+    return;
+  }
+  setClientId(id.toLowerCase());
 }
 
 // ---------------------------------------------------------------------
@@ -913,6 +949,7 @@ async function copyDetails(e) {
     `Browser player: ${playback.browserDeviceId ? "ready" : sdkLoaded ? `script loaded, not ready${playerNote ? ` (${playerNote})` : ""}` : "script not loaded"}`,
     `Chosen device: ${playback.chosenId || "(automatic)"}`,
     `Permissions: ${(store.get("jm_token") || {}).scope || "(not recorded)"}`,
+    `Spotify app: ${CLIENT_ID === DEFAULT_CLIENT_ID ? "Jukemonster's" : "own …" + CLIENT_ID.slice(-4)}`,
     `Secure page: ${window.isSecureContext} · DRM check: ${drmResult} · browser playback errors: ${playback.errors}${playback.browserOk ? " · browser has played OK" : ""}`,
     `Start method per device: ${JSON.stringify(store.get("jm_methods", {}))}`];
   try {
@@ -1846,6 +1883,9 @@ function tickBar() {
 // ---------------------------------------------------------------------
 function wire() {
   $("login-btn").addEventListener("click", () => startLogin());
+  $("own-save").addEventListener("click", onOwnAppSave);
+  $("own-id").addEventListener("keydown", (e) => { if (e.key === "Enter") onOwnAppSave(); });
+  renderOwnApp();
   $("logout-link").addEventListener("click", (e) => { e.preventDefault(); logout(); });
 
   $("pick-solo").addEventListener("click", () => setSolo(true));
@@ -1900,7 +1940,9 @@ async function main() {
     showScreen("screen-login");
     // Spotify answers 403 when the account isn't on the app's User Management list (development mode).
     setStatus($("login-status"), err.status === 403
-      ? "Spotify hasn't let your account use Jukemonster yet. Ask the person who runs it to add your Spotify email under User Management in the Spotify dashboard, then sign in again."
+      ? (CLIENT_ID === DEFAULT_CLIENT_ID
+        ? "Spotify hasn't let your account use Jukemonster yet. Ask the person who runs it to add your Spotify email under User Management in the Spotify dashboard, or use your own Spotify app (below)."
+        : "Spotify hasn't let your account use this Spotify app. Check your app's settings (Web API and Web Playback SDK ticked) and that your account is added under User Management.")
       : "Please sign in again. " + err.message, "err");
     return;
   }
