@@ -487,8 +487,10 @@ const playback = {
     const start = performance.now();
     const local = id === this.browserDeviceId && !!this.player;
     let prev = null;
-    let okSince = null;
     let misses = 0;
+    let firstOk = null;
+    let lastAsked = 0;
+    let lastWhy = "";
     while (performance.now() - start < timeout) {
       // Checking this browser is instant, so look often: short snippets start their timer from here.
       await sleep(local ? 25 : 500);
@@ -498,15 +500,27 @@ const playback = {
         // the audio, so its error events are the only sign of silence.
         if (this.errors > errorsBefore) return null;
         const st = await this.player.getCurrentState().catch(() => null);
-        if (!(st && !st.paused && !st.loading && sameTrack(st.track_window && st.track_window.current_track, card))) {
-          okSince = null;
-          continue;
+        const t = st && st.track_window && st.track_window.current_track;
+        let late = null;
+        if (st && !st.paused && !st.loading && sameTrack(t, card)) {
+          late = Math.max(0, (st.position || 0) - startMs);
+        } else {
+          // Note what the player says (once per change), for "Copy details".
+          const why = !st ? "no state yet" : `${st.paused ? "paused" : "playing"}${st.loading ? ", loading" : ""}, "${t ? t.name : "no song"}"`;
+          if (why !== lastWhy) { debug(`browser player says: ${why}`); lastWhy = why; }
+          // Its own state can lag (seen in Firefox), so ask Spotify every half second too.
+          if (performance.now() - lastAsked > 500) {
+            lastAsked = performance.now();
+            const now = await this.nowPlaying();
+            this.check(gen);
+            if (playingOn(now, id, card)) late = Math.max(0, (now.progress_ms || 0) - startMs);
+          }
         }
-        const late = Math.max(0, (st.position || 0) - startMs);
+        if (late === null) continue;
         if (this.browserOk) return late;
         // First song in this browser: make sure no error follows before trusting it.
-        if (okSince === null) okSince = performance.now();
-        else if (performance.now() - okSince > 2000) { this.browserOk = true; return late; }
+        if (firstOk === null) firstOk = performance.now();
+        else if (performance.now() - firstOk > 1500) { this.browserOk = true; return late; }
         continue;
       }
       const now = await this.nowPlaying();
