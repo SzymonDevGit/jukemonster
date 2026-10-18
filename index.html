@@ -21,22 +21,24 @@
       <h1 class="logo">Jukemonster</h1>
       <p class="sub">Everyone brings a playlist. This is the jukebox.</p>
       <div class="cassette big spin-reels"><div class="label">Party mix ★</div><div class="reels"><i></i><i></i></div></div>
-      <button id="login-btn" class="btn primary wide">Sign in with Spotify</button>
-      <p class="muted small">Needs Spotify Premium. Your login stays in this browser only.</p>
-      <p class="browser-note">Don't use Firefox or Zen for now: Spotify won't play songs there. Use Chrome or Edge, or play through the Spotify app.</p>
-      <p id="login-status" class="status"></p>
       <details id="own-app" class="own-app">
-        <summary>Use your own Spotify app</summary>
-        <p>Spotify lets only 5 people sign in to each app. To host with any account, make a free app of your own (needs Spotify Premium):</p>
+        <summary id="own-summary">Set up your Spotify app (once per browser)</summary>
+        <p>Jukemonster plays music through a free Spotify app of your own (needs Spotify Premium):</p>
         <ol>
           <li>Go to <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and press <b>Create app</b>.</li>
           <li>Give it any name and description. Under <b>Redirect URIs</b>, add <code id="own-redirect"></code> and press Add.</li>
           <li>Tick <b>Web API</b> and <b>Web Playback SDK</b>, agree to the terms and press <b>Save</b>.</li>
-          <li>Copy the app's <b>Client ID</b>, paste it here, press <b>Use it</b>, then sign in.</li>
+          <li>Copy the app's <b>Client ID</b>, paste it here and press <b>Save</b>.</li>
         </ol>
-        <div class="own-row"><input id="own-id" placeholder="Client ID" autocomplete="off" spellcheck="false" aria-label="Client ID"><button id="own-save" class="btn small-btn">Use it</button></div>
+        <div class="own-row"><input id="own-id" placeholder="Client ID" autocomplete="off" spellcheck="false" aria-label="Client ID"><button id="own-save" class="btn small-btn">Save</button></div>
         <p id="own-status" class="small muted"></p>
+        <p class="small muted">Friends can sign in to your app too: add their Spotify email under <b>User Management</b> (up to 5 people).</p>
       </details>
+      <p id="own-using" class="small muted"></p>
+      <button id="login-btn" class="btn primary wide">Sign in with Spotify</button>
+      <p class="muted small">Needs Spotify Premium. Your login stays in this browser only.</p>
+      <p class="browser-note">Don't use Firefox or Zen for now: Spotify won't play songs there. Use Chrome or Edge, or play through the Spotify app.</p>
+      <p id="login-status" class="status"></p>
     </div>
   </section>
 

@@ -12,12 +12,11 @@
  */
 "use strict";
 
-// The Client ID is public by design. Never put the client secret in this file.
-const DEFAULT_CLIENT_ID = "a8509be20756492ca029547063dd8295";
-// Spotify lets only 5 people sign in to an app in development mode, so a host can
-// use their own app's Client ID instead ("Use your own Spotify app" on the sign-in screen).
+// Each host plays through their own Spotify app (Spotify lets only 5 people sign in
+// to an app in development mode). Its Client ID is entered on the sign-in screen and
+// kept in this browser. Never put a client secret in this file.
 const CLIENT_ID = (() => {
-  try { return JSON.parse(localStorage.getItem("jm_client_id")) || DEFAULT_CLIENT_ID; } catch { return DEFAULT_CLIENT_ID; }
+  try { return JSON.parse(localStorage.getItem("jm_client_id")) || ""; } catch { return ""; }
 })();
 const SCOPES = [
   "playlist-read-private",
@@ -123,6 +122,7 @@ async function codeChallenge(verifier) {
 }
 
 async function startLogin() {
+  if (!CLIENT_ID) return;
   const verifier = randomString(64);
   const state = randomString(16);
   store.set("jm_verifier", verifier);
@@ -192,7 +192,7 @@ function logout() {
   location.reload();
 }
 
-// Switches to another Spotify app (or back to Jukemonster's when id is empty).
+// Switches to another Spotify app (or forgets it when id is empty).
 // A sign-in belongs to one app, so it signs you out too.
 function setClientId(id) {
   if (id) store.set("jm_client_id", id);
@@ -201,17 +201,20 @@ function setClientId(id) {
   location.reload();
 }
 
+// First-time setup lives on the sign-in screen: until a Client ID is saved the steps are
+// open and Sign in is disabled; afterwards they fold away behind "Use a different app".
 function renderOwnApp() {
   $("own-redirect").textContent = REDIRECT_URI;
-  const status = $("own-status");
-  status.textContent = "";
-  if (CLIENT_ID === DEFAULT_CLIENT_ID) return;
-  $("own-app").open = true;
+  $("login-btn").disabled = !CLIENT_ID;
+  const using = $("own-using");
+  using.textContent = "";
+  if (!CLIENT_ID) {
+    $("own-app").open = true;
+    return;
+  }
+  $("own-summary").textContent = "Use a different Spotify app";
   $("own-id").value = CLIENT_ID;
-  const back = el("a", "", "Go back to Jukemonster's app");
-  back.href = "#";
-  back.addEventListener("click", (e) => { e.preventDefault(); setClientId(""); });
-  status.append(`Using your own Spotify app (…${CLIENT_ID.slice(-4)}). `, back);
+  using.append(`Using your Spotify app (…${CLIENT_ID.slice(-4)}).`);
 }
 
 function onOwnAppSave() {
@@ -949,7 +952,7 @@ async function copyDetails(e) {
     `Browser player: ${playback.browserDeviceId ? "ready" : sdkLoaded ? `script loaded, not ready${playerNote ? ` (${playerNote})` : ""}` : "script not loaded"}`,
     `Chosen device: ${playback.chosenId || "(automatic)"}`,
     `Permissions: ${(store.get("jm_token") || {}).scope || "(not recorded)"}`,
-    `Spotify app: ${CLIENT_ID === DEFAULT_CLIENT_ID ? "Jukemonster's" : "own …" + CLIENT_ID.slice(-4)}`,
+    `Spotify app: …${CLIENT_ID.slice(-4)}`,
     `Secure page: ${window.isSecureContext} · DRM check: ${drmResult} · browser playback errors: ${playback.errors}${playback.browserOk ? " · browser has played OK" : ""}`,
     `Start method per device: ${JSON.stringify(store.get("jm_methods", {}))}`];
   try {
@@ -1927,6 +1930,8 @@ async function main() {
     setStatus($("login-status"), err.message, "err");
   }
 
+  // A sign-in from before Jukemonster asked for your own Spotify app can't be refreshed.
+  if (!CLIENT_ID) store.remove("jm_token");
   if (!store.get("jm_token")) {
     showScreen("screen-login");
     return;
@@ -1940,9 +1945,7 @@ async function main() {
     showScreen("screen-login");
     // Spotify answers 403 when the account isn't on the app's User Management list (development mode).
     setStatus($("login-status"), err.status === 403
-      ? (CLIENT_ID === DEFAULT_CLIENT_ID
-        ? "Spotify hasn't let your account use Jukemonster yet. Ask the person who runs it to add your Spotify email under User Management in the Spotify dashboard, or use your own Spotify app (below)."
-        : "Spotify hasn't let your account use this Spotify app. Check your app's settings (Web API and Web Playback SDK ticked) and that your account is added under User Management.")
+      ? "Spotify hasn't let this account use your Spotify app. In the Spotify dashboard, check that Web API and Web Playback SDK are ticked, and add any other account under User Management."
       : "Please sign in again. " + err.message, "err");
     return;
   }

@@ -118,6 +118,7 @@ select { flex: 1; max-width: 100%; }
 .own-app li { margin: 5px 0; }
 .own-app code { background: var(--card); border: 1px solid var(--muted); border-radius: 3px; padding: 1px 4px; word-break: break-all; }
 .own-row { display: flex; gap: 8px; }
+#own-using:empty { display: none; }
 .own-row input { flex: 1; min-width: 0; font: inherit; font-size: 14px; color: var(--ink); background: var(--card); border: 2px solid var(--ink); border-radius: 4px; padding: 7px 10px; }
 .own-row input:focus { outline: 3px solid var(--amber); outline-offset: 1px; }
 .browser-note { font-size: 14px; font-weight: 600; color: #a9671a; margin: 8px 0; }

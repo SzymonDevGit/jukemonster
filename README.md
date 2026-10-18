@@ -18,14 +18,14 @@ Pick **Solo** or **Multiplayer** first, then a game:
 
 Before starting, press **Test Audio** and **Heard it!** to check sound. Music plays in the browser tab itself (desktop Chrome or Edge; Firefox and Zen don't work for now), or on any Spotify app you have open, picked under **Play on**. Short snippets are most accurate when playing in the browser tab.
 
-## Spotify app settings
+## Your Spotify app
 
-In the [Spotify developer dashboard](https://developer.spotify.com/dashboard), open the app and add these **Redirect URIs** exactly (with the trailing slash):
+Jukemonster has no Spotify app of its own: each host makes a free one (needs Spotify Premium), and the sign-in screen walks through it the first time. In the [Spotify developer dashboard](https://developer.spotify.com/dashboard), create an app and add the address you open Jukemonster at as a **Redirect URI**, exactly, with the trailing slash:
 
 - `http://127.0.0.1:8000/` for running it on your own PC
 - `https://jukemonster.szy.monster/` for the live site
 
-Under **APIs used**, tick both **Web API** and **Web Playback SDK** (the second lets music play straight in the browser tab).
+Under **APIs used**, tick both **Web API** and **Web Playback SDK** (the second lets music play straight in the browser tab). Then paste the app's **Client ID** on the sign-in screen. It's kept in that browser only.
 
 Songs are started from their playlist (or album), because since autumn 2026 some Spotify apps answer "OK" to a bare song and then play nothing. The app remembers which way works on each device.
 
@@ -36,13 +36,9 @@ If music doesn't start, press **Copy details for troubleshooting** in the app. I
 Spotify's rules for hobby ("Development mode") apps, as of 2026:
 
 - The app owner needs Spotify Premium, and playing songs needs Premium.
-- Only people added under **User Management** in the dashboard can sign in.
+- Only the app's owner and up to 5 people added under **User Management** can sign in to it. Anyone else makes their own app.
 - The app can only read the songs of playlists the signed-in person **owns or collaborates on**. Saved playlists are listed too, and picking one explains how to copy it: open it in Spotify, press Ctrl+A, right-click › Add to playlist › New playlist.
 - Spotify no longer shares song popularity, so "Most Popular" is greyed out and "Most Recently Added" is used.
-
-## More than 5 people
-
-Spotify lets only 5 accounts sign in to an app in development mode (add them under **User Management** in the Spotify dashboard). Anyone else can host with their own free Spotify app: on the sign-in screen, open **Use your own Spotify app** and follow the steps there. The Client ID they paste is kept in their browser only.
 
 ## Default mode
 
@@ -67,4 +63,4 @@ then open http://127.0.0.1:8000/ (use `127.0.0.1`, not `localhost`, because that
 - Build command: *(leave empty)*
 - Deploy command: `npx wrangler deploy`
 
-Then add the custom domain `jukemonster.szy.monster` under the Worker's **Settings › Domains & Routes**, and add `https://jukemonster.szy.monster/` as a Redirect URI in the Spotify dashboard.
+Then add the custom domain `jukemonster.szy.monster` under the Worker's **Settings › Domains & Routes**.
