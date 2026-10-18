@@ -2,3 +2,5 @@
 Thumbs.db
 .cache
 .vscode/
+.wrangler/
+node_modules/

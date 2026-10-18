@@ -56,11 +56,11 @@ python -m http.server 8000 --bind 127.0.0.1
 
 then open http://127.0.0.1:8000/ (use `127.0.0.1`, not `localhost`, because that is what Spotify allows).
 
-## Hosting (Cloudflare Pages)
+## Hosting (Cloudflare)
 
-Create a Pages project from this repository with:
+`wrangler.jsonc` serves this folder as a static site, and `.assetsignore` keeps the README, `run-local.bat` and git files out of it. In Cloudflare, create a Worker from this repository with:
 
 - Build command: *(leave empty)*
-- Build output directory: `/`
+- Deploy command: `npx wrangler deploy`
 
-Then add the custom domain `jukemonster.szy.monster` in the project's **Custom domains** tab.
+Then add the custom domain `jukemonster.szy.monster` under the Worker's **Settings › Domains & Routes**, and add `https://jukemonster.szy.monster/` as a Redirect URI in the Spotify dashboard.
