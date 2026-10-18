@@ -290,21 +290,27 @@ async function fetchPlaylists(me) {
   }));
 }
 
-// The Default mode song list, if this copy of the app has one.
+// The Default mode songs: a ready-made deck (default-deck.json) if this copy has one,
+// otherwise the song list in default-songs.json, looked up on Spotify when first used.
 let defaultDeck = null;
 async function loadDefaultDeck() {
-  try {
-    const res = await fetch("default-deck.json", { cache: "no-cache" });
-    const deck = res.ok ? await res.json() : null;
-    if (deck && Array.isArray(deck.cards) && deck.cards.length) defaultDeck = deck;
-  } catch { /* no default deck */ }
+  for (const file of ["default-deck.json", "default-songs.json"]) {
+    try {
+      const res = await fetch(file, { cache: "no-cache" });
+      const deck = res.ok ? await res.json() : null;
+      if (deck && ((Array.isArray(deck.cards) && deck.cards.length) || (Array.isArray(deck.songs) && deck.songs.length))) {
+        defaultDeck = deck;
+        return;
+      }
+    } catch { /* try the next file */ }
+  }
 }
 
-// Saves a loaded playlist as default-deck.json, for Default mode.
-function exportDeck(cards, sourceId) {
+// Saves loaded songs as default-deck.json, for Default mode.
+function exportDeck(cards, source) {
   const deck = {
     name: "Jukemonster default",
-    source: `spotify:playlist:${sourceId}`,
+    source,
     saved: new Date().toISOString().slice(0, 10),
     cards: cards.map(({ title, artists, year, month, track_id, duration_ms, album_uri }) =>
       ({ title, artists, year, month, track_id, duration_ms, album_uri })),
@@ -314,6 +320,101 @@ function exportDeck(cards, sourceId) {
   a.download = "default-deck.json";
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+const SONG_CACHE = "jm_song_cache_v1";
+const DEFAULT_READY = 60;
+const VERSION_WORDS = /\b(live|karaoke|instrumental|sped up|slowed|acoustic|cover|remix|demo)\b/gi;
+const songKey = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+const bareTitle = (s) => s.replace(/\s*[([].*?[)\]]/g, "").replace(/\s+-\s+.*$/, "").replace(/\s+(feat|ft)\.?\s.*$/i, "").trim() || s;
+
+function trackCard(t) {
+  const [year, month] = extractYearMonth((t.album || {}).release_date);
+  if (year === null || !t.id || t.is_playable === false) return null;
+  return {
+    title: t.name || "Unknown Title",
+    artists: (t.artists || []).map((a) => a.name).join(", ") || "Unknown Artist",
+    year,
+    month,
+    track_id: t.id,
+    duration_ms: t.duration_ms || 0,
+    album_uri: (t.album || {}).uri || "",
+  };
+}
+
+// The words that say which version a track is: what follows its title, plus its album's name
+// unless the album is named after the song.
+function versionWords(t, want) {
+  const album = (t.album || {}).name || "";
+  return `${t.name.slice(bareTitle(t.name).length)} ${songKey(album).includes(want) ? "" : album}`;
+}
+
+// Finds one song of the default list on Spotify. Prefers an exact title match and,
+// among those, the earliest release, so remasters and best-ofs don't change the year.
+async function findSong(artist, title) {
+  const name = bareTitle(title);
+  const want = songKey(name), who = songKey(artist);
+  // A version word (live, remix...) is only OK when the list names that version too.
+  const ownWords = new Set((title.slice(name.length).match(VERSION_WORDS) || []).map((w) => w.toLowerCase()));
+  const wrongVersion = (t) => (versionWords(t, want).match(VERSION_WORDS) || []).some((w) => !ownWords.has(w.toLowerCase()));
+  for (const q of [`track:${name} artist:${artist}`, `${name} ${artist}`]) {
+    const res = await api(`/search?type=track&limit=10&market=from_token&q=${encodeURIComponent(q)}`);
+    const hits = ((res && res.tracks && res.tracks.items) || []).filter((t) => t && t.id
+      && songKey(t.name).includes(want)
+      && (t.artists || []).some((a) => { const n = songKey(a.name); return n && (n.includes(who) || who.includes(n)); })
+      && !wrongVersion(t));
+    const exact = hits.filter((t) => songKey(bareTitle(t.name)) === want).map(trackCard).filter(Boolean);
+    if (exact.length) return exact.reduce((best, c) => (c.year < best.year ? c : best));
+    const close = hits.map(trackCard).filter(Boolean);
+    if (close.length) return close[0];
+  }
+  return null;
+}
+
+// Looks up the default song list a few at a time, remembering results in this browser.
+// The deck is usable once DEFAULT_READY songs are found; the rest keep coming in.
+async function findDefaultSongs(load) {
+  const cache = store.get(SONG_CACHE, {}) || {};
+  const seen = new Set();
+  const add = (card) => {
+    if (!card || seen.has(card.track_id)) return;
+    seen.add(card.track_id);
+    load.cards.push({ ...card, popularity: 0, added_at: "" });
+  };
+  const todo = [];
+  for (const [artist, title] of defaultDeck.songs) {
+    const key = `${artist} - ${title}`;
+    if (key in cache) { add(cache[key]); load.done++; } else todo.push([key, artist, title]);
+  }
+  shuffle(todo);
+  const update = () => {
+    const wasLoading = load.status === "loading";
+    if (wasLoading && (load.cards.length >= DEFAULT_READY || !load.finding)) load.status = load.cards.length ? "ok" : "err";
+    renderRowInfo();
+    if (wasLoading && load.status !== "loading") renderOptions();
+  };
+  load.finding = todo.length > 0;
+  update();
+  let limited = 0;
+  const worker = async () => {
+    while (todo.length) {
+      const job = todo.pop();
+      try {
+        const card = await findSong(job[1], job[2]);
+        cache[job[0]] = card; // null = not on Spotify, so it isn't looked up again
+        add(card);
+      } catch (err) {
+        if (err.status === 429 && ++limited <= 10) { todo.push(job); await sleep(5000); continue; }
+      }
+      load.done++;
+      if (load.done % 25 === 0) { store.set(SONG_CACHE, cache); update(); }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  store.set(SONG_CACHE, cache);
+  load.finding = false;
+  if (!load.cards.length) load.error = "Couldn't find the default songs on Spotify. Press Refresh list to try again.";
+  update();
 }
 
 async function firstPlaylistPage(id) {
@@ -1036,7 +1137,7 @@ function renderPlayerRows() {
         for (const p of items) g.append(new Option(p.total != null ? `${p.name} (${p.total})` : p.name, p.id));
         select.append(g);
       };
-      if (defaultDeck) group("Jukemonster", [{ id: DEFAULT_ID, name: `★ ${defaultDeck.name}`, total: defaultDeck.cards.length }]);
+      if (defaultDeck) group("Jukemonster", [{ id: DEFAULT_ID, name: `★ ${defaultDeck.name}`, total: (defaultDeck.cards || defaultDeck.songs).length }]);
       group("Your playlists", state.playlists.filter((p) => p.mine));
       group("Saved playlists (copy them to use them)", state.playlists.filter((p) => !p.mine));
       // New players start on the default songs, so you can go straight to Start.
@@ -1069,14 +1170,20 @@ function renderRowInfo() {
     const load = id && state.loads.get(id);
     info.className = "info";
     if (!pickExists(id)) info.textContent = "";
-    else if (!load || load.status === "loading") info.textContent = "Loading songs...";
-    else if (load.status === "ok") {
-      info.textContent = `✓ ${load.cards.length} songs ready`;
+    else if (!load || load.status === "loading") {
+      info.textContent = load && load.total
+        ? `Finding the default songs on Spotify... ${load.cards.length} found (${load.done}/${load.total} checked)`
+        : "Loading songs...";
+    } else if (load.status === "ok") {
+      info.textContent = `✓ ${load.cards.length} songs ready` + (load.finding ? ` (finding more: ${load.done}/${load.total})` : "");
       info.classList.add("ok");
-      if (EXPORT_MODE && id !== DEFAULT_ID) {
+      if (EXPORT_MODE && !load.finding && (id !== DEFAULT_ID || !defaultDeck.cards)) {
         const link = el("a", "", "Save as default deck");
         link.href = "#";
-        link.addEventListener("click", (e) => { e.preventDefault(); exportDeck(load.cards, id); });
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          exportDeck(load.cards, id === DEFAULT_ID ? "default-songs.json" : `spotify:playlist:${id}`);
+        });
         info.append(" · ", link);
       }
     } else {
@@ -1092,6 +1199,13 @@ async function loadPick(id) {
   if (!id || state.loads.has(id)) return;
   if (id === DEFAULT_ID) {
     if (!defaultDeck) return;
+    if (!defaultDeck.cards) {
+      const load = { status: "loading", cards: [], done: 0, total: defaultDeck.songs.length, finding: true };
+      state.loads.set(id, load);
+      renderRowInfo();
+      findDefaultSongs(load);
+      return;
+    }
     const cards = defaultDeck.cards.map((c) => ({ ...c, popularity: 0, added_at: "" }));
     state.loads.set(id, { status: "ok", cards });
     renderRowInfo();

@@ -112,6 +112,7 @@ select { flex: 1; max-width: 100%; }
 .status.ok { color: var(--ok); }
 .status.warn { color: #a9671a; }
 .status.err { color: var(--danger); }
+.browser-note { font-size: 14px; font-weight: 600; color: #a9671a; margin: 8px 0; }
 .stage .status:empty, .stage p.muted:empty { display: none; }
 
 /* Cassette */

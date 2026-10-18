@@ -16,7 +16,7 @@ Pick **Solo** or **Multiplayer** first, then a game:
 | Whose Playlist? | | ✓ (3+) | Guess which other player's playlist the song is from. |
 | Older or Newer | ✓ | ✓ | Is the song older or newer than the last one? Same year counts as right. Solo is a streak until your first miss. |
 
-Before starting, press **Test Audio** and **Heard it!** to check sound. Music plays in the browser tab itself (desktop Chrome, Edge or Firefox), or on any Spotify app you have open, picked under **Play on**. Short snippets are most accurate when playing in the browser tab.
+Before starting, press **Test Audio** and **Heard it!** to check sound. Music plays in the browser tab itself (desktop Chrome or Edge; Firefox and Zen don't work for now), or on any Spotify app you have open, picked under **Play on**. Short snippets are most accurate when playing in the browser tab.
 
 ## Spotify app settings
 
@@ -42,13 +42,9 @@ Spotify's rules for hobby ("Development mode") apps, as of 2026:
 
 ## Default mode
 
-`default-deck.json` holds the songs for the **★ Jukemonster default** choice in every playlist picker, so anyone can play without picking a playlist. The songs come from [this playlist](https://open.spotify.com/playlist/7epfU4cGVZ1xHWQbQJl7km), and each one is started from its album, which anyone can play.
+The **★ Jukemonster default** choice in every playlist picker lets anyone play without picking a playlist. Its songs are listed in `default-songs.json`: Spotify's most streamed songs of all time (907 of them, from kworb.net, October 2026). The first time someone uses it, the app looks each song up on Spotify (the game can start once 60 are found; the rest keep coming in) and remembers the results in that browser. Each song is started from its album, which anyone can play.
 
-To make or update the file:
-
-1. In Spotify, copy that playlist into one of your own (open it, Ctrl+A, right-click › Add to playlist › New playlist).
-2. Open the app with `?export` at the end of the address (for example http://127.0.0.1:8000/?export), pick your copy, and press **Save as default deck**.
-3. Put the downloaded `default-deck.json` next to `index.html`.
+To skip the lookup for everyone, open the app with `?export` at the end of the address (for example http://127.0.0.1:8000/?export), wait until the default songs are all found, press **Save as default deck**, and put the downloaded `default-deck.json` next to `index.html`. The same link saves any of your own playlists as the default instead.
 
 ## Run it on your PC
 
