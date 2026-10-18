@@ -37,8 +37,18 @@ Spotify's rules for hobby ("Development mode") apps, as of 2026:
 
 - The app owner needs Spotify Premium, and playing songs needs Premium.
 - Only people added under **User Management** in the dashboard can sign in.
-- The app can only read playlists the signed-in person **owns or collaborates on**, so only those are listed. For a friend's playlist, ask them to invite you as a collaborator, or copy its songs into a playlist of your own.
+- The app can only read the songs of playlists the signed-in person **owns or collaborates on**. Saved playlists are listed too, and picking one explains how to copy it: open it in Spotify, press Ctrl+A, right-click › Add to playlist › New playlist.
 - Spotify no longer shares song popularity, so "Most Popular" is greyed out and "Most Recently Added" is used.
+
+## Default mode
+
+`default-deck.json` holds the songs for the **★ Jukemonster default** choice in every playlist picker, so anyone can play without picking a playlist. The songs come from [this playlist](https://open.spotify.com/playlist/7epfU4cGVZ1xHWQbQJl7km), and each one is started from its album, which anyone can play.
+
+To make or update the file:
+
+1. In Spotify, copy that playlist into one of your own (open it, Ctrl+A, right-click › Add to playlist › New playlist).
+2. Open the app with `?export` at the end of the address (for example http://127.0.0.1:8000/?export), pick your copy, and press **Save as default deck**.
+3. Put the downloaded `default-deck.json` next to `index.html`.
 
 ## Run it on your PC
 

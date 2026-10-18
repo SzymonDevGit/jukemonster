@@ -26,6 +26,19 @@ const SCOPES = [
 // Must match a Redirect URI in the Spotify dashboard exactly.
 const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, "");
 
+// Default mode: a song list saved in default-deck.json (see README). Its songs
+// start from their albums, which anyone can play and always hold the song.
+const DEFAULT_ID = "default";
+// Open the app with ?export to get a "Save as default deck" link on loaded playlists
+// (remembered for this tab, because signing in reloads the page without it).
+const EXPORT_MODE = (() => {
+  try {
+    if (new URLSearchParams(location.search).has("export")) sessionStorage.setItem("jm_export", "1");
+    return sessionStorage.getItem("jm_export") === "1";
+  } catch { return false; }
+})();
+const COPY_HELP = "Spotify only shares the songs of playlists you made or collaborate on. To use this one, make your own copy: open it in Spotify on a computer, press Ctrl+A (Cmd+A on a Mac), right-click › Add to playlist › New playlist. On a phone, use the playlist's ⋯ menu › Add to other playlist. Then press Refresh list here.";
+
 const MAX_PLAYERS = 6;
 const MAX_PER_YEAR = 3;
 const FULL_PLAY_MS = 30000;
@@ -260,16 +273,47 @@ function shuffle(arr) {
 }
 
 // Playlists this app may read: ones you own or collaborate on (Spotify's 2026 rule).
-async function fetchAllowedPlaylists(me) {
+// Every playlist in your library. Spotify only shares the songs of the ones
+// you made or collaborate on ("mine"); the others are listed so we can say how to copy them.
+async function fetchPlaylists(me) {
   const list = [];
   let page = await api("/me/playlists?limit=50");
   for (let n = 0; page && n < 20; n++) {
     list.push(...(page.items || []).filter(Boolean));
     page = page.next ? await api(page.next) : null;
   }
-  return list
-    .filter((p) => (p.owner && p.owner.id === me.id) || p.collaborative)
-    .map((p) => ({ id: p.id, name: p.name || "Untitled playlist", total: ((p.items || p.tracks) || {}).total }));
+  return list.map((p) => ({
+    id: p.id,
+    name: p.name || "Untitled playlist",
+    total: ((p.items || p.tracks) || {}).total,
+    mine: (!!p.owner && p.owner.id === me.id) || !!p.collaborative,
+  }));
+}
+
+// The Default mode song list, if this copy of the app has one.
+let defaultDeck = null;
+async function loadDefaultDeck() {
+  try {
+    const res = await fetch("default-deck.json", { cache: "no-cache" });
+    const deck = res.ok ? await res.json() : null;
+    if (deck && Array.isArray(deck.cards) && deck.cards.length) defaultDeck = deck;
+  } catch { /* no default deck */ }
+}
+
+// Saves a loaded playlist as default-deck.json, for Default mode.
+function exportDeck(cards, sourceId) {
+  const deck = {
+    name: "Jukemonster default",
+    source: `spotify:playlist:${sourceId}`,
+    saved: new Date().toISOString().slice(0, 10),
+    cards: cards.map(({ title, artists, year, month, track_id, duration_ms, album_uri }) =>
+      ({ title, artists, year, month, track_id, duration_ms, album_uri })),
+  };
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(deck)], { type: "application/json" }));
+  a.download = "default-deck.json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 async function firstPlaylistPage(id) {
@@ -811,6 +855,11 @@ function playerName(i) {
   return (state.names[i] || "").trim() || (state.solo ? "You" : `Player ${i + 1}`);
 }
 
+function pickExists(id) {
+  if (id === DEFAULT_ID) return !!defaultDeck;
+  return !!id && !!state.playlists && state.playlists.some((p) => p.id === id);
+}
+
 function activeLoads() {
   return Array.from({ length: activeCount() }, (_, i) => state.loads.get(state.picks[i]));
 }
@@ -939,6 +988,9 @@ function renderPlayerCount() {
   }
 }
 
+// Rows where the player chose "Pick a playlist..." themselves, so the default stays off.
+const clearedPicks = new Set();
+
 function renderPlayerRows() {
   const wrap = $("player-rows");
   wrap.replaceChildren();
@@ -958,18 +1010,31 @@ function renderPlayerRows() {
     if (!state.playlists) {
       select.append(new Option("Loading your playlists...", ""));
       select.disabled = true;
-    } else if (!state.playlists.length) {
+    } else if (!state.playlists.length && !defaultDeck) {
       select.append(new Option("No playlists found. Make one in Spotify, then Refresh list", ""));
       select.disabled = true;
     } else {
       select.append(new Option("Pick a playlist...", ""));
-      for (const p of state.playlists) {
-        select.append(new Option(p.total != null ? `${p.name} (${p.total})` : p.name, p.id));
+      const group = (label, items) => {
+        if (!items.length) return;
+        const g = document.createElement("optgroup");
+        g.label = label;
+        for (const p of items) g.append(new Option(p.total != null ? `${p.name} (${p.total})` : p.name, p.id));
+        select.append(g);
+      };
+      if (defaultDeck) group("Jukemonster", [{ id: DEFAULT_ID, name: `★ ${defaultDeck.name}`, total: defaultDeck.cards.length }]);
+      group("Your playlists", state.playlists.filter((p) => p.mine));
+      group("Saved playlists (copy them to use them)", state.playlists.filter((p) => !p.mine));
+      // New players start on the default songs, so you can go straight to Start.
+      if (!state.picks[i] && defaultDeck && !clearedPicks.has(i)) {
+        state.picks[i] = DEFAULT_ID;
+        saveSetup();
       }
-      select.value = state.playlists.some((p) => p.id === state.picks[i]) ? state.picks[i] : "";
+      select.value = pickExists(state.picks[i]) ? state.picks[i] : "";
     }
     select.addEventListener("change", () => {
       state.picks[i] = select.value;
+      if (!select.value) clearedPicks.add(i);
       saveSetup();
       loadPick(state.picks[i]);
       renderRowInfo();
@@ -980,6 +1045,7 @@ function renderPlayerRows() {
     row.append(stripe, name, select, info);
     wrap.append(row);
   }
+  if (state.picks.slice(0, activeCount()).includes(DEFAULT_ID)) loadPick(DEFAULT_ID);
   renderRowInfo();
 }
 
@@ -988,16 +1054,36 @@ function renderRowInfo() {
     const id = state.picks[Number(info.dataset.index)];
     const load = id && state.loads.get(id);
     info.className = "info";
-    if (!id || !state.playlists || !state.playlists.some((p) => p.id === id)) info.textContent = "";
+    if (!pickExists(id)) info.textContent = "";
     else if (!load || load.status === "loading") info.textContent = "Loading songs...";
-    else if (load.status === "ok") { info.textContent = `✓ ${load.cards.length} songs ready`; info.classList.add("ok"); }
-    else { info.textContent = load.error; info.classList.add("err"); }
+    else if (load.status === "ok") {
+      info.textContent = `✓ ${load.cards.length} songs ready`;
+      info.classList.add("ok");
+      if (EXPORT_MODE && id !== DEFAULT_ID) {
+        const link = el("a", "", "Save as default deck");
+        link.href = "#";
+        link.addEventListener("click", (e) => { e.preventDefault(); exportDeck(load.cards, id); });
+        info.append(" · ", link);
+      }
+    } else {
+      const meta = state.playlists.find((p) => p.id === id);
+      info.textContent = meta && !meta.mine ? COPY_HELP : load.error;
+      info.classList.add("err");
+    }
   });
   updateStart();
 }
 
 async function loadPick(id) {
   if (!id || state.loads.has(id)) return;
+  if (id === DEFAULT_ID) {
+    if (!defaultDeck) return;
+    const cards = defaultDeck.cards.map((c) => ({ ...c, popularity: 0, added_at: "" }));
+    state.loads.set(id, { status: "ok", cards });
+    renderRowInfo();
+    renderOptions();
+    return;
+  }
   state.loads.set(id, { status: "loading" });
   renderRowInfo();
   try {
@@ -1014,15 +1100,17 @@ async function loadPick(id) {
 function loadActivePicks() {
   if (!state.playlists) return;
   for (let i = 0; i < activeCount(); i++) {
-    if (state.playlists.some((p) => p.id === state.picks[i])) loadPick(state.picks[i]);
+    if (pickExists(state.picks[i])) loadPick(state.picks[i]);
   }
 }
 
 async function refreshPlaylists() {
   state.playlists = null;
+  // Try failed playlists again (e.g. one you've just been made a collaborator on).
+  for (const [id, load] of state.loads) if (load.status === "err") state.loads.delete(id);
   renderSetup();
   try {
-    state.playlists = await fetchAllowedPlaylists(state.me);
+    state.playlists = await fetchPlaylists(state.me);
   } catch (err) {
     state.playlists = [];
     setStatus($("setup-status"), "Couldn't load your playlists: " + err.message, "err");
@@ -1089,8 +1177,8 @@ function startProblem() {
   if (loads.some((l) => !l)) return state.solo ? "Pick your playlist." : "Pick a playlist for every player.";
   if (loads.some((l) => l.status === "loading")) return "Loading songs...";
   if (loads.some((l) => l.status === "err")) return "One of the playlists can't be used. Pick another.";
-  if (state.mode === "whose" && new Set(state.picks.slice(0, activeCount())).size < 2) {
-    return "Whose Playlist? needs players to pick different playlists.";
+  if (state.mode === "whose" && new Set(state.picks.slice(0, activeCount())).size < activeCount()) {
+    return "Whose Playlist? needs every player to pick a different playlist.";
   }
   if (!state.heard) return "Press Test Audio and check you can hear music.";
   return "";
@@ -1144,7 +1232,10 @@ function newGame() {
     if (!m) { m = { ...c, owners: [] }; merged.set(c.track_id, m); }
     if (!m.owners.includes(i)) m.owners.push(i);
   }));
-  const prep = (cards) => shuffle(state.reduce ? applyYearLimit(cards, dedupeMode()) : cards.slice());
+  // Shuffle first so "Max 3 songs per year" doesn't always keep the same three.
+  const prep = (cards) => shuffle(state.reduce ? applyYearLimit(shuffle(cards.slice()), dedupeMode()) : cards.slice());
+  // Players on the same playlist share one pile, so nobody gets a song someone already had.
+  const samePicks = new Set(state.picks.slice(0, n)).size < n;
 
   game = {
     mode: state.mode,
@@ -1154,7 +1245,7 @@ function newGame() {
     players: Array.from({ length: n }, (_, i) => ({
       name: playerName(i), color: PLAYER_COLORS[i], score: 0, turns: 0, timeline: [], lives: SOLO_LIVES,
     })),
-    useShared: state.solo || state.mix || state.mode === "whose",
+    useShared: state.solo || state.mix || state.mode === "whose" || samePicks,
     shared: prep([...merged.values()]),
     own: lists.map((cards) => prep(cards.map((c) => merged.get(c.track_id)))),
     active: 0,
@@ -1675,6 +1766,7 @@ async function main() {
   try {
     state.me = await api("/me");
     $("user-name").textContent = state.me.display_name || state.me.id;
+    await loadDefaultDeck();
   } catch (err) {
     store.remove("jm_token");
     showScreen("screen-login");
