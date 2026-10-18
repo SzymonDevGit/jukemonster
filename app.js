@@ -1898,7 +1898,10 @@ async function main() {
   } catch (err) {
     store.remove("jm_token");
     showScreen("screen-login");
-    setStatus($("login-status"), "Please sign in again. " + err.message, "err");
+    // Spotify answers 403 when the account isn't on the app's User Management list (development mode).
+    setStatus($("login-status"), err.status === 403
+      ? "Spotify hasn't let your account use Jukemonster yet. Ask the person who runs it to add your Spotify email under User Management in the Spotify dashboard, then sign in again."
+      : "Please sign in again. " + err.message, "err");
     return;
   }
   renderSetup();
