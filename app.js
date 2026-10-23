@@ -46,8 +46,10 @@ const COPY_HELP = "Spotify only shares the songs of playlists you made or collab
 const MAX_PLAYERS = 6;
 const MAX_PER_YEAR = 3;
 const FULL_PLAY_MS = 30000;
-const TIMELINE_GOAL = 10;
-const SOLO_LIVES = 3;
+const TIMELINE_GOAL = 20;
+const SOLO_LIVES = 6;          // Timeline solo: wrong placements allowed
+const OLDER_NEWER_LIVES = 2;   // Older or Newer solo: misses allowed
+const ALBUM_CHOICES = 5;       // Match the Album: albums to pick from
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
   "August", "September", "October", "November", "December"];
 const PLAYER_COLORS = ["var(--p0)", "var(--p1)", "var(--p2)", "var(--p3)", "var(--p4)", "var(--p5)"];
@@ -69,10 +71,14 @@ const MODES = {
     name: "Guess the Song", color: "var(--p1)", solo: true,
     desc: "Name it from a 0.5, 1, 5 or 30 second snippet. The less you hear, the more points.",
   },
+  album: {
+    name: "Match the Album", color: "var(--p4)", solo: true,
+    desc: "Hear a song, then pick which of 5 albums by that artist it's from.",
+  },
   timeline: {
     name: "Timeline", color: "var(--p2)", solo: true,
-    desc: "Place each song in your own timeline. First to 10 cards wins.",
-    soloDesc: "Build your timeline. Three wrong placements and it's over.",
+    desc: "Place each song in your own timeline. First to 20 cards wins.",
+    soloDesc: "Build your timeline. Six wrong placements and it's over.",
   },
   whose: {
     name: "Whose Playlist?", color: "var(--p3)", solo: false, minPlayers: 3,
@@ -81,7 +87,7 @@ const MODES = {
   oldernewer: {
     name: "Older or Newer", color: "var(--p5)", solo: true,
     desc: "Is this song older or newer than the last one?",
-    soloDesc: "Keep your streak going: is each song older or newer than the last?",
+    soloDesc: "Is each song older or newer than the last? Two misses and it's over.",
   },
 };
 
@@ -985,7 +991,9 @@ const state = {
   months: !!saved.months,
   reduce: !!saved.reduce,
   dedupe: saved.dedupe || "popularity",
-  lengths: saved.lengths || {},
+  // Game lengths were doubled in October 2026, so double lengths saved before then too.
+  lengths: saved.lengthsDoubled ? saved.lengths || {}
+    : Object.fromEntries(Object.entries(saved.lengths || {}).map(([k, v]) => [k, v * 2])),
 
   me: null,
   playlists: null,       // allowed playlists, once fetched
@@ -995,7 +1003,7 @@ const state = {
 
 function saveSetup() {
   const { solo, mode, numPlayers, names, picks, mix, months, reduce, dedupe, lengths } = state;
-  store.set("jm_setup2", { solo, mode, numPlayers, names, picks, mix, months, reduce, dedupe, lengths });
+  store.set("jm_setup2", { solo, mode, numPlayers, names, picks, mix, months, reduce, dedupe, lengths, lengthsDoubled: true });
 }
 
 function activeCount() {
@@ -1029,11 +1037,11 @@ function dedupeMode() {
 }
 
 function lengthSetting() {
-  if (state.mode === "guess") {
-    return state.solo ? { label: "Songs", values: [5, 10, 20], def: 10 } : { label: "Rounds", values: [3, 5, 10], def: 5 };
+  if (state.mode === "guess" || state.mode === "album") {
+    return state.solo ? { label: "Songs", values: [10, 20, 40], def: 20 } : { label: "Rounds", values: [6, 10, 20], def: 10 };
   }
   if (state.mode === "whose" || (state.mode === "oldernewer" && !state.solo)) {
-    return { label: "Rounds", values: [3, 5, 10], def: 5 };
+    return { label: "Rounds", values: [6, 10, 20], def: 10 };
   }
   return null;
 }
@@ -1411,7 +1419,8 @@ function newGame() {
     months: state.months,
     rounds: lengthValue(),
     players: Array.from({ length: n }, (_, i) => ({
-      name: playerName(i), color: PLAYER_COLORS[i], score: 0, turns: 0, timeline: [], lives: SOLO_LIVES,
+      name: playerName(i), color: PLAYER_COLORS[i], score: 0, turns: 0, timeline: [],
+      lives: state.mode === "oldernewer" ? OLDER_NEWER_LIVES : SOLO_LIVES,
     })),
     useShared: state.solo || state.mix || state.mode === "whose" || samePicks,
     shared: prep([...merged.values()]),
@@ -1424,6 +1433,8 @@ function newGame() {
     slot: null,        // Timeline: chosen position
     placed: null,      // Timeline: card just added
     reference: null,   // Older or Newer: the previous song
+    albums: null,      // Match the Album: { right, choices, picked }
+    preparing: false,  // Match the Album: looking up the next song's albums
     barStart: null,
     barMs: FULL_PLAY_MS,
     over: null,        // reason the game ended
@@ -1527,6 +1538,154 @@ function onSnippet(levelIndex) {
   }, note).catch((err) => setStatus($("play-status"), err.message, "err"));
 }
 
+// ---------------------------------------------------------------------
+// Match the Album
+// ---------------------------------------------------------------------
+// Titles made only of symbols ("÷", "+") keep their symbols instead of becoming empty.
+const albumKey = (name) => {
+  const bare = bareTitle(name || "");
+  return songKey(bare) || bare.trim().toLowerCase();
+};
+// Editions count as the same album: "DAMN." and "DAMN. COLLECTORS EDITION.", "Kid A" and "KID A MNESIA".
+// (Treating two different albums as one only means one fewer wrong choice.)
+const sameAlbum = (a, b) => a === b || (!!a && !!b && (a.startsWith(b) || b.startsWith(a)));
+const isAlbum = (a) => !!a && (a.album_type || "").toLowerCase() === "album";
+// True when the album is the artist's own (not a soundtrack or various-artists album).
+const byArtist = (a, artistId) => !a.artists || a.artists.some((x) => x.id === artistId);
+const artistAlbumCache = new Map();
+
+function albumChoice(a) {
+  const images = a.images || [];
+  const image = (images.find((i) => i.width && i.width <= 320) || images[images.length - 1] || images[0] || {}).url || "";
+  return { id: a.id, name: a.name || "Untitled album", image };
+}
+
+// An artist's own albums (no singles, compilations or albums they only appear on),
+// one per title, so "After Hours" and "After Hours (Deluxe)" count once.
+async function artistAlbums(artistId) {
+  if (artistAlbumCache.has(artistId)) return artistAlbumCache.get(artistId);
+  const base = `/artists/${encodeURIComponent(artistId)}/albums?include_groups=album&market=from_token`;
+  let items = [];
+  try {
+    const page = await api(`${base}&limit=50`);
+    items = (page && page.items) || [];
+  } catch (err) {
+    if (err.status !== 400) throw err;
+    // Development-mode apps may get a smaller page size.
+    for (let offset = 0; offset < 50; offset += 10) {
+      const page = await api(`${base}&limit=10&offset=${offset}`);
+      items.push(...((page && page.items) || []));
+      if (!page || !page.next) break;
+    }
+  }
+  const seen = [];
+  const albums = [];
+  for (const a of items) {
+    if (!a || !a.id || (a.album_type && !isAlbum(a))) continue;
+    const key = albumKey(a.name);
+    if (!key || seen.some((k) => sameAlbum(k, key))) continue;
+    seen.push(key);
+    albums.push(albumChoice(a));
+  }
+  artistAlbumCache.set(artistId, albums);
+  return albums;
+}
+
+// The album a song is on. When the song's own release is a single or a best-of,
+// looks for the same song on one of the artist's albums; null if it has none.
+async function songAlbum(t, artist) {
+  if (isAlbum(t.album) && byArtist(t.album, artist.id)) return t.album;
+  const name = bareTitle(t.name || "");
+  const want = songKey(name);
+  if (!want) return null; // a title with no Latin letters or digits can't be matched safely
+  const res = await api(`/search?type=track&limit=10&market=from_token&q=${encodeURIComponent(`track:${name} artist:${artist.name}`)}`);
+  const hits = ((res && res.tracks && res.tracks.items) || []).filter((h) => h
+    && isAlbum(h.album) && byArtist(h.album, artist.id)
+    && (h.artists || []).some((a) => a.id === artist.id)
+    && songKey(bareTitle(h.name || "")) === want
+    && !(versionWords(h, want).match(VERSION_WORDS) || []).length);
+  hits.sort((a, b) => (a.album.release_date || "").localeCompare(b.album.release_date || ""));
+  return hits.length ? hits[0].album : null;
+}
+
+// Builds a round for one song: its album plus 4 other albums by the same artist.
+// Returns null when the song isn't on an album or the artist has too few albums.
+async function buildAlbumRound(card) {
+  const t = await api(`/tracks/${encodeURIComponent(card.track_id)}?market=from_token`);
+  const artist = t && (t.artists || [])[0];
+  if (!artist || !artist.id) return null;
+  const album = await songAlbum(t, artist);
+  if (!album) return null;
+  const key = albumKey(album.name);
+  const others = shuffle((await artistAlbums(artist.id)).filter((a) => !sameAlbum(albumKey(a.name), key)));
+  // Live albums only fill in when there aren't enough studio ones.
+  const isLive = (a) => /\blive\b/i.test(a.name);
+  const pick = [...others.filter((a) => !isLive(a)), ...others.filter(isLive)].slice(0, ALBUM_CHOICES - 1);
+  if (pick.length < ALBUM_CHOICES - 1) return null;
+  const right = albumChoice(album);
+  return { right: right.id, rightName: right.name, choices: shuffle([right, ...pick]), picked: null };
+}
+
+// Draws songs until one has 5 albums to pick from, then plays it.
+async function onAlbumPlay() {
+  const g = game;
+  if (g.current || g.preparing) return;
+  g.preparing = true;
+  renderGame();
+  const note = (text, kind) => setStatus($("play-status"), text, kind);
+  note("Picking the albums...");
+  let round = null;
+  let card = null;
+  try {
+    for (let tries = 0; tries < 15 && !round; tries++) {
+      card = drawCard();
+      if (!card) break;
+      try {
+        round = await buildAlbumRound(card);
+      } catch (err) {
+        // Spotify not knowing the song (400/404) skips it. Anything else (offline, rate limit,
+        // server trouble) puts it back and stops, so a hiccup doesn't throw songs away.
+        if (![400, 404].includes(err.status)) { deckFor(g.active).push(card); throw err; }
+        round = null;
+      }
+      // Stop if the game was left (Setup) or replaced while looking up.
+      if (game !== g || g.over || $("screen-play").classList.contains("hidden")) { g.preparing = false; return; }
+    }
+  } catch (err) {
+    g.preparing = false;
+    if (game !== g || $("screen-play").classList.contains("hidden")) return;
+    note(err.message, "err");
+    renderGame();
+    return;
+  }
+  g.preparing = false;
+  if (!round) {
+    if (!card) {
+      endGame(g.useShared ? "Out of songs!" : `${g.players[g.active].name} ran out of songs.`);
+    } else {
+      note("Couldn't find 5 albums for the last few songs' artists. Press Play Card to try more, or pick another playlist.", "err");
+      renderGame();
+    }
+    return;
+  }
+  g.current = card;
+  g.albums = round;
+  g.phase = "playing";
+  g.result = null;
+  note("");
+  renderGame();
+  playFull();
+}
+
+function onAlbumPick(id) {
+  const a = game.albums;
+  if (!a || game.phase !== "playing") return;
+  a.picked = id;
+  const ok = id === a.right;
+  if (ok) game.players[game.active].score++;
+  reveal({ ok, text: ok ? "✓ Right album!" : "✗ Wrong album" });
+}
+
 function reveal(result = null) {
   if (!game.current) return;
   game.phase = "revealed";
@@ -1564,7 +1723,7 @@ function onOlderNewer(older) {
   const ref = game.reference.year;
   const ok = older ? y <= ref : y >= ref;
   if (ok) game.players[game.active].score++;
-  else if (game.solo) game.players[0].lives = 0;
+  else if (game.solo) game.players[0].lives--;
   reveal({ ok, text: ok ? "✓ Correct!" : "✗ Wrong" });
 }
 
@@ -1585,6 +1744,7 @@ function finishTurn() {
   game.result = null;
   game.slot = null;
   game.level = 0;
+  game.albums = null;
   game.barStart = null;
 
   const reason = overReason();
@@ -1598,14 +1758,15 @@ function overReason() {
   const ps = game.players;
   switch (game.mode) {
     case "timeline": {
-      if (game.solo) return ps[0].lives <= 0 ? "Three wrong placements." : null;
+      if (game.solo) return ps[0].lives <= 0 ? "Six wrong placements." : null;
       const winner = ps.find((p) => p.timeline.length >= TIMELINE_GOAL);
       return winner ? `${winner.name} reached ${TIMELINE_GOAL} cards!` : null;
     }
     case "oldernewer":
-      if (game.solo) return ps[0].lives <= 0 ? "Streak over." : null;
+      if (game.solo) return ps[0].lives <= 0 ? "Out of lives." : null;
       return ps.every((p) => p.turns >= game.rounds) ? "All rounds played." : null;
     case "guess":
+    case "album":
     case "whose":
       return ps.every((p) => p.turns >= game.rounds) ? "All rounds played." : null;
     default:
@@ -1629,12 +1790,16 @@ function scoreOf(p) {
 function scoreLabel(p) {
   switch (game.mode) {
     case "guess": return `${p.score} pts`;
+    case "album": return `${p.score} pts`;
     case "whose": return `${p.score} pts`;
     case "timeline":
       return game.solo
         ? `${p.timeline.length} ${p.timeline.length === 1 ? "card" : "cards"} · ${"♥".repeat(Math.max(0, p.lives))}${"♡".repeat(SOLO_LIVES - Math.max(0, p.lives))}`
         : `${p.timeline.length} / ${TIMELINE_GOAL}`;
-    case "oldernewer": return game.solo ? `Streak ${p.score}` : `${p.score} pts`;
+    case "oldernewer":
+      return game.solo
+        ? `${p.score} right · ${"♥".repeat(Math.max(0, p.lives))}${"♡".repeat(OLDER_NEWER_LIVES - Math.max(0, p.lives))}`
+        : `${p.score} pts`;
     default: return "";
   }
 }
@@ -1646,12 +1811,14 @@ function endGame(reason) {
   let sub;
   if (game.solo) {
     const p = game.players[0];
-    const key = `jm_best_${game.mode}${game.rounds ? "_" + game.rounds : ""}`;
+    // Timeline and Older or Newer got more lives in October 2026, so their bests start fresh.
+    const fresh = game.mode === "timeline" || game.mode === "oldernewer" ? "_long" : "";
+    const key = `jm_best_${game.mode}${game.rounds ? "_" + game.rounds : ""}${fresh}`;
     const best = store.get(key, 0);
     const score = scoreOf(p);
     if (score > best) store.set(key, score);
     const what = game.mode === "timeline" ? `${score} ${score === 1 ? "card" : "cards"} in your timeline`
-      : game.mode === "oldernewer" ? `a streak of ${score}` : `${score} points`;
+      : game.mode === "oldernewer" ? `${score} right` : `${score} ${score === 1 ? "point" : "points"}`;
     sub = `${reason} You got ${what}. ${score > best ? "New best!" : `Your best is ${best}.`}`;
   } else {
     const top = scoreOf(ranked[0]);
@@ -1694,12 +1861,14 @@ function renderGame(popIndex = -1) {
   const prompts = {
     classic: g.phase === "playing" ? ", place your card!" : "'s turn",
     guess: ", name that song!",
+    album: ", which album is this song from?",
     timeline: g.phase === "playing" ? ", tap where this song goes" : "'s turn",
     whose: ", whose playlist is this on?",
     oldernewer: ", older or newer than the last song?",
   };
   const soloPrompts = {
     guess: "Name that song!",
+    album: "Which album is this song from?",
     timeline: g.phase === "playing" ? "Tap where this song goes" : "Your turn",
     oldernewer: "Older or newer than the last song?",
   };
@@ -1722,6 +1891,7 @@ function renderGame(popIndex = -1) {
   $("card-hint").textContent = {
     classic: "Place your card, then hit Reveal",
     guess: "Say your guess out loud, then Reveal",
+    album: "Pick the album below",
     timeline: "Tap a + in your timeline",
     whose: "Pick a player below",
     oldernewer: "Older or newer?",
@@ -1739,6 +1909,9 @@ function renderGame(popIndex = -1) {
     extra.replaceChildren();
     if (g.mode === "whose") {
       extra.append("On ", el("b", "", g.current.owners.map((o) => g.players[o].name).join(" and ")), "'s playlist");
+    }
+    if (g.mode === "album" && g.albums) {
+      extra.append("From ", el("b", "", g.albums.rightName));
     }
     if (g.mode === "oldernewer" && g.reference) {
       extra.append("Last song was ", el("b", "", formatCardDate(g.reference, g.months)));
@@ -1826,12 +1999,44 @@ function renderControls() {
       }
       break;
 
+    case "album":
+      if (!has) {
+        c.append(button(g.preparing ? "Picking albums..." : "Play Card", "primary", onAlbumPlay, g.preparing));
+        break;
+      }
+      if (revealed) c.append(button(nextLabel, "primary", finishTurn));
+      else c.append(playBtn());
+      c.append(albumGrid());
+      break;
+
     case "oldernewer":
       if (revealed) c.append(button(nextLabel, "primary", finishTurn));
       else if (!has) c.append(playBtn());
       else c.append(playBtn(), el("div", "break"), button("◀ Older", "teal", () => onOlderNewer(true)), button("Newer ▶", "primary", () => onOlderNewer(false)));
       break;
   }
+}
+
+// The 5 album choices. After a pick, the right one is marked (and a wrong pick too).
+function albumGrid() {
+  const a = game.albums;
+  const grid = el("div", "album-grid");
+  if (!a) return grid;
+  const done = game.phase === "revealed";
+  for (const choice of a.choices) {
+    const b = el("button", "album-choice"
+      + (done && choice.id === a.right ? " right" : "")
+      + (done && choice.id === a.picked && choice.id !== a.right ? " wrong" : ""));
+    b.disabled = done;
+    const img = el("img");
+    img.alt = "";
+    img.loading = "lazy";
+    if (choice.image) img.src = choice.image;
+    b.append(img, el("span", "", choice.name));
+    b.addEventListener("click", () => onAlbumPick(choice.id));
+    grid.append(b);
+  }
+  return grid;
 }
 
 function renderTimelines() {

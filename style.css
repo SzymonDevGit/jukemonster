@@ -191,6 +191,16 @@ button.score { cursor: pointer; }
 .controls .snip small { display: block; font-size: 11px; font-weight: 400; }
 .controls .guess { border-left: 8px solid var(--c); }
 .controls .break { flex-basis: 100%; height: 0; }
+/* Wider than the stage on big screens, so all 5 covers fit in one row. */
+.album-grid { flex-basis: 100%; width: min(700px, calc(100vw - 32px)); display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
+.album-choice { display: flex; flex-direction: column; gap: 6px; padding: 6px; font: inherit; font-size: 13px; line-height: 1.25; text-align: left; color: var(--ink); background: var(--card); border: 2px solid var(--ink); border-radius: 6px; box-shadow: 3px 3px 0 var(--ink); cursor: pointer; }
+.album-choice:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
+.album-choice:focus-visible { outline: 3px solid var(--amber); outline-offset: 1px; }
+.album-choice:disabled { cursor: default; }
+.album-choice img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; background: var(--tape-soft); }
+.album-choice.right { outline: 4px solid var(--ok); outline-offset: 1px; }
+.album-choice.wrong { outline: 4px solid var(--danger); outline-offset: 1px; }
+.album-choice:disabled:not(.right):not(.wrong) { opacity: .55; }
 
 /* Timelines */
 .timelines { display: flex; flex-direction: column; gap: 14px; min-width: 0; }

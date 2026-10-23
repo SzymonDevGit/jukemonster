@@ -11,10 +11,11 @@ Pick **Solo** or **Multiplayer** first, then a game:
 | Game | Solo | Multiplayer | How it works |
 | --- | :-: | :-: | --- |
 | Classic | | ✓ | The app plays a song; you place your own physical Hitster-style cards and press Reveal. |
-| Guess the Song | ✓ | ✓ | Listen to 0.5, 1, 5 or 30 seconds (each unlocks after the last). 4, 3, 2 or 1 points for a right answer. Set the number of rounds. |
-| Timeline | ✓ | ✓ | Place each song in your on-screen timeline. Everyone's timeline is shown. First to 10 cards wins; solo ends after 3 wrong placements. |
-| Whose Playlist? | | ✓ (3+) | Guess which other player's playlist the song is from. |
-| Older or Newer | ✓ | ✓ | Is the song older or newer than the last one? Same year counts as right. Solo is a streak until your first miss. |
+| Guess the Song | ✓ | ✓ | Listen to 0.5, 1, 5 or 30 seconds (each unlocks after the last). 4, 3, 2 or 1 points for a right answer. 10, 20 or 40 songs solo; 6, 10 or 20 rounds in multiplayer. |
+| Match the Album | ✓ | ✓ | Hear a song and pick which of 5 albums by that artist it's from (covers and names shown). 1 point per right album; same lengths as Guess the Song. Songs that only came out as singles are skipped, as are artists with fewer than 5 albums. |
+| Timeline | ✓ | ✓ | Place each song in your on-screen timeline. Everyone's timeline is shown. First to 20 cards wins; solo ends after 6 wrong placements. |
+| Whose Playlist? | | ✓ (3+) | Guess which other player's playlist the song is from. 6, 10 or 20 rounds. |
+| Older or Newer | ✓ | ✓ | Is the song older or newer than the last one? Same year counts as right. 6, 10 or 20 rounds; solo ends after 2 misses. |
 
 Before starting, press **Test Audio** and **Heard it!** to check sound. Music plays in the browser tab itself (desktop Chrome or Edge; Firefox and Zen don't work for now), or on any Spotify app you have open, picked under **Play on**. Short snippets are most accurate when playing in the browser tab.
 
