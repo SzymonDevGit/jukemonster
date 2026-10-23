@@ -682,7 +682,10 @@ const playback = {
       misses = 0;
       // "Playing" can be reported before any sound, so wait for the position to move.
       const pos = now.progress_ms || 0;
-      if ((prev !== null && pos > prev) || pos > startMs + 150) return Math.max(0, pos - startMs);
+      if ((prev !== null && pos > prev) || pos > startMs + 150) {
+        this.lastVolume = now.device.volume_percent;
+        return Math.max(0, pos - startMs);
+      }
       prev = pos;
     }
     return null;
@@ -697,6 +700,7 @@ const playback = {
     clearTimeout(this.snippetTimer);
     clearTimeout(this.endTimer);
     this.late = 0;
+    this.lastVolume = undefined;
     let d = null;
     let sent = false;
     try {
@@ -725,7 +729,9 @@ const playback = {
       const methods = store.get("jm_methods", {});
       const key = local ? "browser" : d.id;
       const known = attempts.find((a) => a.name === methods[key]);
-      if (known) attempts = [known, ...attempts.filter((a) => a !== known)];
+      // Playing from the playlist has made sound on every Spotify app so far, so it stays
+      // first; a start method remembered from Default mode songs only orders the rest.
+      if (known && !card.playlist) attempts = [known, ...attempts.filter((a) => a !== known)];
       debug(`play "${card.title}" on ${d.name} (${local ? "this browser" : d.type}, ${d.is_active ? "active" : "idle"})`);
 
       const errorsBefore = this.errors;
@@ -789,7 +795,7 @@ const playback = {
           ? `This browser didn't start "${card.title}". ${seen} Click anywhere on the page and try again, or pick your Spotify app under Play on.`
           : `"${d.name}" didn't start "${card.title}". ${seen} Try again, or pick "This browser" under Play on.`);
       }
-      debug(`playing (${used.name}), ${late} ms in`);
+      debug(`playing (${used.name}), ${late} ms in${!local && typeof this.lastVolume === "number" ? `, volume ${this.lastVolume}%` : ""}`);
       if (methods[key] !== used.name) {
         methods[key] = used.name;
         store.set("jm_methods", methods);
@@ -963,7 +969,7 @@ async function copyDetails(e) {
     `Start method per device: ${JSON.stringify(store.get("jm_methods", {}))}`];
   try {
     const devices = await playback.listDevices();
-    lines.push("Devices:", ...devices.map((d) => `  ${d.name} | ${d.type} | ${d.is_active ? "active" : "idle"}${d.is_restricted ? " | restricted" : ""}${d.id === playback.browserDeviceId ? " | this browser" : ""}${d.id === playback.chosenId || (playback.chosenId === "browser" && d.id === playback.browserDeviceId) ? " | chosen" : ""}`));
+    lines.push("Devices:", ...devices.map((d) => `  ${d.name} | ${d.type} | ${d.is_active ? "active" : "idle"}${typeof d.volume_percent === "number" ? ` | volume ${d.volume_percent}%` : ""}${d.is_restricted ? " | restricted" : ""}${d.id === playback.browserDeviceId ? " | this browser" : ""}${d.id === playback.chosenId || (playback.chosenId === "browser" && d.id === playback.browserDeviceId) ? " | chosen" : ""}`));
   } catch (err) {
     lines.push(`Devices: couldn't list (${err.message})`);
   }
