@@ -230,3 +230,15 @@ button.score { cursor: pointer; }
 #fade.on { opacity: 1; }
 .foot { padding: 16px; }
 .foot .discord-link { color: var(--teal); font-weight: 700; }
+
+/* Guess the Song: type a guess, pick from the matches */
+.guess-box { max-width: 460px; margin: 14px auto 0; }
+.guess-box input { width: 100%; font: inherit; font-size: 16px; color: var(--ink); background: var(--card); border: 2px solid var(--ink); border-radius: 4px; padding: 10px 12px; box-sizing: border-box; }
+.guess-box input:focus { outline: 3px solid var(--amber); outline-offset: 1px; }
+.guess-box input:disabled { opacity: .55; }
+.guess-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.guess-list:empty { display: none; }
+.guess-list button { display: block; width: 100%; text-align: left; font: inherit; font-size: 14px; color: var(--ink); background: var(--card); border: 2px solid var(--ink); border-top-width: 0; padding: 8px 12px; cursor: pointer; }
+.guess-list li:first-child button { border-top-width: 2px; }
+.guess-list button:hover, .guess-list button:focus-visible { background: var(--amber); outline: none; }
+.guess-list .a { color: var(--muted); }
