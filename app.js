@@ -183,12 +183,17 @@ async function handleRedirect() {
   store.remove("jm_state");
 }
 
+// Many requests can find the token expired at once; they share one refresh, because
+// Spotify may replace the refresh token and a second refresh with the old one would fail.
+let refreshing = null;
 async function accessToken() {
   let token = store.get("jm_token");
   if (!token) throw new Error("Not signed in.");
   if (Date.now() > token.expires) {
     if (!token.refresh) throw new Error("Not signed in.");
-    token = await tokenRequest({ grant_type: "refresh_token", refresh_token: token.refresh });
+    refreshing = refreshing || tokenRequest({ grant_type: "refresh_token", refresh_token: token.refresh })
+      .finally(() => { refreshing = null; });
+    token = await refreshing;
   }
   return token.access;
 }
@@ -1241,7 +1246,7 @@ function renderRowInfo() {
         info.append(" · ", link);
       }
     } else {
-      const meta = state.playlists.find((p) => p.id === id);
+      const meta = (state.playlists || []).find((p) => p.id === id);
       info.textContent = meta && !meta.mine ? COPY_HELP : load.error;
       info.classList.add("err");
     }
@@ -1711,8 +1716,9 @@ function onTimelineReveal() {
   if (ok) {
     tl.splice(i, 0, game.current);
     game.placed = game.current;
-  } else if (game.solo) {
-    p.lives--;
+  } else {
+    game.placed = null;
+    if (game.solo) p.lives--;
   }
   reveal(ok ? { ok, text: "✓ Right spot!" } : { ok, text: "✗ Wrong spot" });
 }
@@ -1795,9 +1801,9 @@ function scoreOf(p) {
 
 function scoreLabel(p) {
   switch (game.mode) {
-    case "guess": return `${p.score} pts`;
-    case "album": return `${p.score} pts`;
-    case "whose": return `${p.score} pts`;
+    case "guess":
+    case "album":
+    case "whose": return `${p.score} ${p.score === 1 ? "pt" : "pts"}`;
     case "timeline":
       return game.solo
         ? `${p.timeline.length} ${p.timeline.length === 1 ? "card" : "cards"} · ${"♥".repeat(Math.max(0, p.lives))}${"♡".repeat(SOLO_LIVES - Math.max(0, p.lives))}`
@@ -1813,6 +1819,8 @@ function scoreLabel(p) {
 function endGame(reason) {
   playback.pause();
   game.over = reason;
+  // The play screen stays up during the fade; a second click there would end the game again.
+  $("controls").replaceChildren();
   const ranked = game.players.slice().sort((a, b) => scoreOf(b) - scoreOf(a));
   let sub;
   if (game.solo) {
