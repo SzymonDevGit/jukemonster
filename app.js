@@ -2,7 +2,7 @@
  * Jukemonster: a one-screen music party game. Each player brings a Spotify
  * playlist and Jukemonster is the jukebox, with five games:
  *   Classic         - the app plays songs, you use your own physical cards
- *   Guess the Song  - name it from a 0.5 / 1 / 5 / 30 second snippet
+ *   Guess the Song  - name it from a 0.5 / 1 / 5 / 30 second snippet (type it or say it)
  *   Timeline        - place songs in your on-screen timeline
  *   Whose Playlist? - guess which player's playlist a song is from
  *   Older or Newer  - is this song older or newer than the last one?
@@ -770,7 +770,8 @@ const playback = {
         try {
           await api(`/me/player/play?${at}`, { method: "PUT", body: a.body });
         } catch (err) {
-          if ([401, 403, 429].includes(err.status)) throw err;
+          // A 403 can mean only this way of starting is blocked, so try the others first.
+          if ([401, 429].includes(err.status)) throw err;
           lastErr = err;
           this.check(gen);
           continue;
@@ -795,7 +796,7 @@ const playback = {
         debug(`gave up. ${seen}`);
         // Make sure a late start doesn't surprise anyone after we've said it failed.
         await this.stop(d.id);
-        if (lastErr && lastErr.status === 404) throw lastErr;
+        if (lastErr && [403, 404].includes(lastErr.status)) throw lastErr;
         throw new Error(local
           ? `This browser didn't start "${card.title}". ${seen} Click anywhere on the page and try again, or pick your Spotify app under Play on.`
           : `"${d.name}" didn't start "${card.title}". ${seen} Try again, or pick "This browser" under Play on.`);
@@ -1434,6 +1435,9 @@ function newGame() {
       lives: state.mode === "oldernewer" ? OLDER_NEWER_LIVES : SOLO_LIVES,
     })),
     useShared: state.solo || state.mix || state.mode === "whose" || samePicks,
+    // Guess the Song: every song in the game, one per title and artist, for typed guesses.
+    pool: [...new Map([...merged.values()].map((c) => [songKey(bareTitle(c.title)) + "|" + songKey(c.artists), c])).values()],
+    typed: false,      // Guess the Song: the guess was typed in and judged already
     shared: prep([...merged.values()]),
     own: lists.map((cards) => prep(cards.map((c) => merged.get(c.track_id)))),
     active: 0,
@@ -1462,6 +1466,7 @@ function newGame() {
   if (game.mode === "oldernewer") game.reference = drawCard();
 
   setStatus($("play-status"), "");
+  clearGuess();
   $("mode-name").textContent = MODES[game.mode].name;
   renderGame(0);
   showScreen("screen-play");
@@ -1697,6 +1702,64 @@ function onAlbumPick(id) {
   reveal({ ok, text: ok ? "✓ Right album!" : "✗ Wrong album" });
 }
 
+// A song that never started can be swapped for another without using up the turn.
+function onSkipSong() {
+  playback.pause();
+  game.current = null;
+  game.phase = "idle";
+  game.level = 0;
+  game.barStart = null;
+  setStatus($("play-status"), "Skipped. Try the next song.");
+  renderGame();
+}
+
+// Guess the Song: songs in the game whose title or artist matches what's typed.
+function guessMatches(text) {
+  const q = songKey(text);
+  if (!q) return [];
+  const starts = [], inside = [];
+  for (const c of game.pool) {
+    const t = songKey(c.title);
+    if (t.startsWith(q)) starts.push(c);
+    else if (t.includes(q) || songKey(c.artists).includes(q)) inside.push(c);
+    if (starts.length >= 8) break;
+  }
+  return [...starts, ...inside].slice(0, 8);
+}
+
+function renderGuessList() {
+  const list = $("guess-list");
+  list.replaceChildren();
+  for (const c of guessMatches($("guess-input").value)) {
+    const b = el("button");
+    b.type = "button";
+    b.append(el("b", "", c.title), " ", el("span", "a", "· " + c.artists));
+    b.addEventListener("click", () => onTypedGuess(c));
+    const li = el("li");
+    li.append(b);
+    list.append(li);
+  }
+}
+
+function clearGuess() {
+  $("guess-input").value = "";
+  $("guess-list").replaceChildren();
+}
+
+function onTypedGuess(pick) {
+  if (!game.current || game.phase !== "playing" || !game.level) return;
+  const c = game.current;
+  const ok = pick.track_id === c.track_id
+    || (songKey(bareTitle(pick.title)) === songKey(bareTitle(c.title)) && songKey(pick.artists) === songKey(c.artists));
+  const p = game.players[game.active];
+  const points = ok ? LEVELS[game.level - 1].points : 0;
+  p.score += points;
+  game.typed = true;
+  clearGuess();
+  reveal({ ok, text: ok ? "✓ Right song!" : `✗ Not "${pick.title}"` });
+  setStatus($("play-status"), ok ? `${p.name} +${points} ${points === 1 ? "point" : "points"}` : `No points for ${p.name}`, ok ? "ok" : "");
+}
+
 function reveal(result = null) {
   if (!game.current) return;
   game.phase = "revealed";
@@ -1758,6 +1821,8 @@ function finishTurn() {
   game.level = 0;
   game.albums = null;
   game.barStart = null;
+  game.typed = false;
+  clearGuess();
 
   const reason = overReason();
   if (reason) { endGame(reason); return; }
@@ -1904,7 +1969,7 @@ function renderGame(popIndex = -1) {
   $("card-empty").textContent = g.mode === "guess" ? "Start with the 0.5 sec snippet" : "Press \"Play Card\" to spin one up";
   $("card-hint").textContent = {
     classic: "Place your card, then hit Reveal",
-    guess: "Say your guess out loud, then Reveal",
+    guess: "Type your guess below, or say it out loud and Reveal",
     album: "Pick the album below",
     timeline: "Tap a + in your timeline",
     whose: "Pick a player below",
@@ -1958,6 +2023,10 @@ function renderControls() {
   c.replaceChildren();
   const hint = $("play-hint");
   hint.textContent = "";
+  const guessing = g.mode === "guess" && !!g.current && g.phase === "playing";
+  $("guess-box").classList.toggle("hidden", !guessing);
+  $("guess-input").disabled = !g.level;
+  $("guess-input").placeholder = g.level ? "Type the song name..." : "Play a snippet, then type your guess";
   const has = !!g.current;
   const playing = g.phase === "playing";
   const revealed = g.phase === "revealed";
@@ -1971,7 +2040,9 @@ function renderControls() {
       break;
 
     case "guess":
-      if (revealed) {
+      if (revealed && g.typed) {
+        c.append(button(nextLabel, "primary", finishTurn));
+      } else if (revealed) {
         const pts = LEVELS[g.level - 1].points;
         c.append(
           button(`Got it! +${pts}`, "teal", () => onGuessJudged(true)),
@@ -1985,8 +2056,9 @@ function renderControls() {
           c.append(b);
         });
         c.append(el("div", "break"), button("Reveal", "teal", () => reveal(), g.level === 0));
+        if (has && g.level === 0) c.append(button("Skip song", "", onSkipSong));
         hint.textContent = g.level
-          ? `Worth ${LEVELS[g.level - 1].points} ${g.level === 4 ? "point" : "points"} right now. Longer snippets are worth less.`
+          ? `Worth ${LEVELS[g.level - 1].points} ${g.level === 4 ? "point" : "points"} right now. Type your guess below, or say it out loud and press Reveal.`
           : "Each longer snippet unlocks after the one before.";
       }
       break;
@@ -2133,6 +2205,12 @@ function wire() {
   $("mode-popular").addEventListener("click", () => { state.dedupe = "popularity"; saveSetup(); renderOptions(); });
   $("mode-recent").addEventListener("click", () => { state.dedupe = "recent"; saveSetup(); renderOptions(); });
   $("start-btn").addEventListener("click", () => { if (!startProblem()) newGame(); });
+
+  $("guess-input").addEventListener("input", renderGuessList);
+  $("guess-input").addEventListener("keydown", (e) => {
+    const first = $("guess-list").querySelector("button");
+    if (e.key === "Enter" && first) first.click();
+  });
 
   $("back-btn").addEventListener("click", () => { playback.pause(); renderSetup(); showScreen("screen-setup"); });
   $("again-btn").addEventListener("click", newGame);
