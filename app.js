@@ -571,6 +571,7 @@ const playback = {
   browserOk: false,  // this browser has played a song with no errors
   browserBad: "",    // why this browser can't play, if we know
   playStarted: 0,    // when the last play on this browser was confirmed
+  stopTimes: {},     // device id -> how long a pause request takes there (ms, averaged)
 
   async listDevices() {
     const data = await api("/me/player/devices");
@@ -643,8 +644,9 @@ const playback = {
     let lastAsked = 0;
     let lastWhy = "";
     while (performance.now() - start < timeout) {
-      // Checking this browser is instant, so look often: short snippets start their timer from here.
-      await sleep(local ? 25 : 500);
+      // Short snippets start their timer from here, so look often: this browser is instant
+      // to check, a Spotify app (e.g. on a phone) needs a request each time.
+      await sleep(local ? 25 : 200);
       this.check(gen);
       if (local) {
         // The browser player's state says "playing" even when it can't decode
@@ -832,9 +834,12 @@ const playback = {
     if (!(await this.play(card, startMs, note))) return false;
     const gen = this.gen;
     if (onStart) onStart();
+    // A Spotify app only stops once the pause request reaches it, so send it that much early.
+    const lead = this.inBrowser() ? 0 : Math.min(600, Math.round(0.5 * (this.stopTimes[this.lastDevice] || 500)));
+    if (lead) debug(`snippet ${ms} ms: stopping ${lead} ms early for the app's delay`);
     this.snippetTimer = setTimeout(() => {
       if (gen === this.gen) this.pause();
-    }, Math.max(0, ms - this.late));
+    }, Math.max(0, ms - this.late - lead));
     return true;
   },
 
@@ -843,7 +848,13 @@ const playback = {
     if (this.player && id === this.browserDeviceId) {
       try { await this.player.pause(); return; } catch { /* fall back to the API */ }
     }
-    try { await api(`/me/player/pause?device_id=${encodeURIComponent(id)}`, { method: "PUT" }); } catch { /* already paused */ }
+    const sent = performance.now();
+    try {
+      await api(`/me/player/pause?device_id=${encodeURIComponent(id)}`, { method: "PUT" });
+      const took = performance.now() - sent;
+      const before = this.stopTimes[id];
+      this.stopTimes[id] = before ? (before + took) / 2 : took;
+    } catch { /* already paused */ }
   },
 
   async pause() {
