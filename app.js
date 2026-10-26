@@ -398,6 +398,8 @@ function trackCard(t) {
     track_id: t.id,
     duration_ms: t.duration_ms || 0,
     album_uri: (t.album || {}).uri || "",
+    album_name: (t.album || {}).name || "",
+    album_type: (t.album || {}).album_type || "",
   };
 }
 
@@ -520,6 +522,8 @@ async function fetchPlaylistCards(id) {
         track_id: t.id,
         duration_ms: t.duration_ms || 0,
         album_uri: (t.album || {}).uri || "",
+        album_name: (t.album || {}).name || "",
+        album_type: (t.album || {}).album_type || "",
         popularity: t.popularity || 0,
         added_at: entry.added_at || "",
       });
@@ -1448,6 +1452,9 @@ function startProblem() {
   if (state.mode === "whose" && new Set(state.picks.slice(0, activeCount())).size < activeCount()) {
     return "Whose Playlist? needs every player to pick a different playlist.";
   }
+  if (state.mode === "album" && !albumArtists(activeLoads().flatMap((l) => l.cards)).size) {
+    return "Match the Album needs an artist with songs from at least 3 of their albums in the playlists.";
+  }
   if (state.mode === "koth" && kothArtists(activeLoads().flatMap((l) => l.cards)).length < 4) {
     return "King of the Hill needs songs by at least 4 different artists.";
   }
@@ -1548,6 +1555,13 @@ function newGame() {
   }
   if (game.mode === "oldernewer") game.reference = drawCard();
   if (game.mode === "koth") game.koth = newBracket([...merged.values()]);
+  if (game.mode === "album") {
+    // Only artists with 3+ of their albums in the playlists, so those albums can all be choices.
+    game.artistAlbums = albumArtists([...merged.values()]);
+    const ok = (c) => game.artistAlbums.has(mainArtist(c));
+    game.shared = game.shared.filter(ok);
+    game.own = game.own.map((d) => d.filter(ok));
+  }
   // For the share card: where the songs came from.
   const picks = [...new Set(state.picks.slice(0, n))];
   const meta = picks.length === 1 && picks[0] !== DEFAULT_ID && (state.playlists || []).find((p) => p.id === picks[0]);
@@ -1720,6 +1734,25 @@ async function songAlbum(t, artist) {
   return hits.length ? hits[0].album : null;
 }
 
+const mainArtist = (c) => c.main_artist || c.artists.split(", ")[0];
+
+// Each artist's albums in these songs (singles and compilations left out, editions counted once),
+// keeping only artists with at least 3.
+function albumArtists(cards) {
+  const byArtist = new Map();
+  for (const c of cards) {
+    if (c.album_type && c.album_type !== "album") continue;
+    const key = c.album_name ? albumKey(c.album_name) : c.album_uri;
+    if (!key) continue;
+    const name = mainArtist(c);
+    if (!byArtist.has(name)) byArtist.set(name, []);
+    const keys = byArtist.get(name);
+    if (!keys.some((k) => sameAlbum(k, key))) keys.push(key);
+  }
+  for (const [name, keys] of byArtist) if (keys.length < 3) byArtist.delete(name);
+  return byArtist;
+}
+
 // Builds a round for one song: its album plus 4 other albums by the same artist.
 // Returns null when the song isn't on an album or the artist has too few albums.
 async function buildAlbumRound(card) {
@@ -1730,9 +1763,13 @@ async function buildAlbumRound(card) {
   if (!album) return null;
   const key = albumKey(album.name);
   const others = shuffle((await artistAlbums(artist.id)).filter((a) => !sameAlbum(albumKey(a.name), key)));
-  // Live albums only fill in when there aren't enough studio ones.
+  // The artist's other albums from the playlists come first (harder to rule out), then studio
+  // albums; live albums only fill in when there aren't enough.
+  const mine = (game.artistAlbums && game.artistAlbums.get(mainArtist(card))) || [];
+  const inPlaylist = (a) => mine.some((k) => sameAlbum(k, albumKey(a.name)) || k.endsWith(`:${a.id}`));
   const isLive = (a) => /\blive\b/i.test(a.name);
-  const pick = [...others.filter((a) => !isLive(a)), ...others.filter(isLive)].slice(0, ALBUM_CHOICES - 1);
+  const pick = [...others.filter(inPlaylist), ...others.filter((a) => !inPlaylist(a) && !isLive(a)),
+    ...others.filter((a) => !inPlaylist(a) && isLive(a))].slice(0, ALBUM_CHOICES - 1);
   if (pick.length < ALBUM_CHOICES - 1) return null;
   const right = albumChoice(album);
   return { right: right.id, rightName: right.name, choices: shuffle([right, ...pick]), picked: null };
