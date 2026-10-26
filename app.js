@@ -1330,6 +1330,8 @@ async function refreshDevices() {
   const select = $("device-select");
   try {
     const devices = await playback.listDevices();
+    // Just this tab: point people to their Spotify app, since some browsers can't play.
+    $("device-hint").classList.toggle("hidden", !(devices.length === 1 && devices[0].id === playback.browserDeviceId));
     select.replaceChildren();
     if (!devices.length) {
       select.append(new Option("No devices: open Spotify somewhere, then press ↻", ""));
