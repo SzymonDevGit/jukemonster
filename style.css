@@ -256,3 +256,7 @@ button.score { cursor: pointer; }
 .bracket .won { color: var(--ok); font-weight: 700; }
 .bracket .lost { color: var(--muted); text-decoration: line-through; }
 @media (max-width: 560px) { .koth-vs { flex-basis: 100%; text-align: center; } .koth-side { max-width: none; } }
+
+/* Share card on the results screen */
+.share { width: 100%; max-width: 420px; margin: 0 0 18px; }
+.share-text { font-family: var(--mono); font-size: 12px; line-height: 1.35; text-align: left; background: var(--card); border: 2px dashed var(--ink); border-radius: 4px; padding: 12px; margin: 0 0 10px; overflow-x: auto; white-space: pre; }
