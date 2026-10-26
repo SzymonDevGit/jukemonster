@@ -98,6 +98,8 @@ const MODES = {
 };
 
 const $ = (id) => document.getElementById(id);
+const IS_PHONE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------
@@ -920,11 +922,22 @@ window.onSpotifyWebPlaybackSDKReady = () => {
   startBrowserPlayer();
 };
 
+// On phones, playing in this tab puts the song on the lock screen; show a cover title instead.
+function hideNowPlaying() {
+  if (!IS_PHONE || !playback.player || !("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
+  const m = navigator.mediaSession.metadata;
+  if (m && m.title === "Your guess here") return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: "Your guess here", artist: "Jukemonster", album: "Mystery mix" });
+  } catch { /* not supported */ }
+}
+
 function startBrowserPlayer() {
   if (!sdkLoaded || !signedIn || playerStarted) return;
   playerStarted = true;
   const problem = (text) => {
     debug(`browser player problem: ${text}`);
+    $("play-help").open = true;
     playerNote = text;
     playback.player = null;
     playback.browserDeviceId = null;
@@ -936,6 +949,7 @@ function startBrowserPlayer() {
     debug(`DRM check: ${result}`);
     if (result !== "ok") {
       playback.browserBad = `No sound in this browser. ${browserHelp()}`;
+      $("play-help").open = true;
       refreshDevices();
     }
   });
@@ -944,6 +958,9 @@ function startBrowserPlayer() {
     getOAuthToken: (cb) => accessToken().then(cb).catch(() => problem("This browser couldn't sign in to play music. Sign out and sign in again, or pick your Spotify app under Play on.")),
     volume: 0.8,
   });
+  // Spotify's player keeps setting the real song, so keep putting the cover back.
+  player.addListener("player_state_changed", hideNowPlaying);
+  setInterval(hideNowPlaying, 500);
   player.addListener("ready", ({ device_id }) => {
     debug("browser player ready");
     playerNote = "";
@@ -1326,6 +1343,47 @@ async function refreshPlaylists() {
   loadActivePicks();
 }
 
+// The Spotify-app warning only matters on phones that aren't playing in this tab.
+function updatePhoneNotes() {
+  const inTab = $("device-select").value === "browser";
+  document.querySelectorAll(".phone-note").forEach((p) => p.classList.toggle("hidden", !IS_PHONE || inTab));
+}
+
+// A sleeping Spotify app (iPhones pause it in the background) can't be woken from here,
+// so after a failed start on an app, try again when the player comes back to this tab.
+let retryOnReturn = null;
+function failedStart(err, statusEl, retry) {
+  // Premium and rate-limit problems won't go away by opening the app.
+  const app = playback.lastDevice && playback.lastDevice !== playback.browserDeviceId && !/Premium|rate-limiting/.test(err.message);
+  retryOnReturn = app ? retry : null;
+  setStatus(statusEl, app ? `The song didn't start on ${playback.lastName} (Spotify may have fallen asleep there). Open the Spotify app, then come back here: the song will start by itself.` : err.message, "err");
+  if (!app) $("play-help").open = true;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !retryOnReturn) return;
+  const retry = retryOnReturn;
+  retryOnReturn = null;
+  setTimeout(retry, 1500);
+});
+
+// Keeps a phone's screen on during a game, so the tab (and its music) doesn't stop.
+let wakeLock = null;
+async function keepAwake(on) {
+  if (!IS_PHONE || !("wakeLock" in navigator)) return;
+  try {
+    if (on && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+    }
+  } catch { /* not allowed right now */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && game && !game.over && !$("screen-play").classList.contains("hidden")) keepAwake(true);
+});
+
 async function refreshDevices() {
   const select = $("device-select");
   try {
@@ -1345,6 +1403,7 @@ async function refreshDevices() {
       select.append(new Option(label + (d.is_active ? " · active" : ""), value(d)));
     }
     select.value = value(playback.pick(devices));
+    updatePhoneNotes();
   } catch {
     select.replaceChildren(new Option("Couldn't list devices", ""));
   }
@@ -1417,7 +1476,7 @@ async function onTestAudio() {
     $("heard-btn").disabled = false;
     setStatus(status, `"${sample.title}" is playing on ${playback.lastName}. Can you hear it? Press "Heard it!" if you do.`);
   } catch (err) {
-    setStatus(status, err.message, "err");
+    failedStart(err, status, onTestAudio);
   }
 }
 
@@ -1499,6 +1558,7 @@ function newGame() {
 
   setStatus($("play-status"), "");
   clearGuess();
+  keepAwake(true);
   $("mode-name").textContent = MODES[game.mode].name;
   renderGame(0);
   showScreen("screen-play");
@@ -1556,7 +1616,8 @@ async function playFull() {
     game.barMs = FULL_PLAY_MS;
     note("");
   } catch (err) {
-    setStatus($("play-status"), err.message, "err");
+    const g = game;
+    failedStart(err, $("play-status"), () => { if (game === g && g.current === card && g.phase === "playing") playFull(); });
   }
 }
 
@@ -1583,7 +1644,10 @@ function onSnippet(levelIndex) {
     game.barStart = performance.now() - playback.late;
     game.barMs = ms;
     note("");
-  }, note).catch((err) => setStatus($("play-status"), err.message, "err"));
+  }, note).catch((err) => {
+    const g = game;
+    failedStart(err, $("play-status"), () => { if (game === g && g.current === card && g.phase === "playing") onSnippet(levelIndex); });
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -1993,6 +2057,7 @@ function scoreLabel(p) {
 
 function endGame(reason) {
   playback.pause();
+  keepAwake(false);
   game.over = reason;
   // The play screen stays up during the fade; a second click there would end the game again.
   $("controls").replaceChildren();
@@ -2422,10 +2487,7 @@ function wire() {
   $("own-save").addEventListener("click", onOwnAppSave);
   $("own-id").addEventListener("keydown", (e) => { if (e.key === "Enter") onOwnAppSave(); });
   renderOwnApp();
-  // Phones play through the Spotify app, whose notification shows the song's name.
-  const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
-    || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
-  document.querySelectorAll(".phone-note").forEach((p) => p.classList.toggle("hidden", !phone));
+  document.querySelectorAll(".game-link").forEach((e) => { e.textContent = REDIRECT_URI.replace(/^https?:\/\//, ""); });
   $("logout-link").addEventListener("click", (e) => { e.preventDefault(); logout(); });
 
   $("pick-solo").addEventListener("click", () => setSolo(true));
@@ -2442,6 +2504,7 @@ function wire() {
     state.heard = false;
     $("heard-btn").disabled = true;
     setStatus($("setup-status"), "Press Test Audio to check this device.");
+    updatePhoneNotes();
     updateStart();
   });
 
@@ -2458,7 +2521,7 @@ function wire() {
     if (e.key === "Enter" && first) first.click();
   });
 
-  $("back-btn").addEventListener("click", () => { playback.pause(); renderSetup(); showScreen("screen-setup"); });
+  $("back-btn").addEventListener("click", () => { playback.pause(); keepAwake(false); retryOnReturn = null; renderSetup(); showScreen("screen-setup"); });
   $("again-btn").addEventListener("click", newGame);
   $("copy-btn").addEventListener("click", onCopyShare);
   $("share-btn").addEventListener("click", () => navigator.share({ text: $("share-text").textContent }).catch(() => {}));

@@ -78,7 +78,15 @@
         <button id="refresh-devices" class="btn tiny" title="Look for Spotify devices again" aria-label="Look for Spotify devices again">↻</button>
       </div>
       <p id="device-hint" class="browser-note hidden">Only this browser is listed. Some browsers can't play Spotify, so open the Spotify app on your phone (or computer), play any song for a second, then press ↻ and pick it under Play on.</p>
-      <p class="browser-note phone-note hidden">Playing on a phone? The Spotify app's notification and lock screen show the song's name. Turn off Spotify's notifications before you start, or play on a computer and pick &quot;This browser&quot; under Play on.</p>
+      <p class="browser-note phone-note hidden">Playing through the Spotify app? Its notification and lock screen show the song's name, so turn off Spotify's notifications or keep the phone face down. Playing in this tab (&quot;This browser&quot; under Play on) hides it.</p>
+      <details id="play-help" class="own-app play-help">
+        <summary>Music not playing? Try these in order</summary>
+        <ol>
+          <li><b>Play in this tab (best).</b> Pick <b>This browser</b> under Play on and press Test Audio. Nothing to install, and on phones your lock screen says &quot;Your guess here&quot; instead of the song.</li>
+          <li><b>Try another browser.</b> Open <span class="game-link"></span> in <b>Chrome</b> or <b>Edge</b> (Android, Windows, Mac) or <b>Safari</b> (iPhone, iPad, Mac): those are the browsers Spotify's player supports. Firefox, Zen and DuckDuckGo usually won't play.</li>
+          <li><b>Use the Spotify app.</b> Open the Spotify app on your phone or computer, play any song for a second, come back here, press ↻ and pick it under Play on. Its notification shows the song's name, so turn off Spotify's notifications or keep the phone face down. On iPhone, Spotify falls asleep between songs: if one won't start, open Spotify and come back here, and the song starts by itself.</li>
+        </ol>
+      </details>
       <div class="row">
         <button id="test-btn" class="btn" disabled>Test Audio</button>
         <button id="heard-btn" class="btn" disabled>Heard it!</button>
@@ -154,7 +162,7 @@
         </div>
         <p id="play-hint" class="muted small center"></p>
         <p id="play-status" class="status center"></p>
-        <p class="browser-note phone-note center hidden">Playing on a phone? The Spotify app's notification and lock screen show the song's name. Turn off Spotify's notifications before you start, or play on a computer and pick &quot;This browser&quot; under Play on.</p>
+        <p class="browser-note phone-note center hidden">Playing through the Spotify app? Its notification and lock screen show the song's name, so turn off Spotify's notifications or keep the phone face down.</p>
         <p class="muted small center"><a href="#" class="copy-debug">Copy details for troubleshooting</a></p>
       </div>
       <div id="timelines" class="timelines hidden"></div>
