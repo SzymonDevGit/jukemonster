@@ -243,3 +243,16 @@ button.score { cursor: pointer; }
 .guess-list button:hover, .guess-list button:focus-visible { background: var(--amber); outline: none; }
 .guess-list .a { color: var(--muted); }
 .safe-note { border-left: 3px solid var(--teal); padding-left: 10px; overflow-wrap: anywhere; }
+
+/* King of the Hill */
+.koth-side { flex: 1 1 200px; display: flex; flex-direction: column; gap: 6px; align-items: stretch; max-width: 280px; }
+.controls .koth-pick { border-left: 8px solid var(--c); min-height: 110px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.koth-pick b { font-family: var(--marker); font-weight: 400; font-size: 22px; line-height: 1.15; overflow-wrap: anywhere; }
+.koth-pick small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.koth-vs { align-self: center; font-family: var(--marker); font-size: 22px; }
+.bracket { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.bracket li.now { font-weight: 700; background: #ffe9c7; border-radius: 3px; }
+.bracket i { color: var(--muted); font-style: normal; }
+.bracket .won { color: var(--ok); font-weight: 700; }
+.bracket .lost { color: var(--muted); text-decoration: line-through; }
+@media (max-width: 560px) { .koth-vs { flex-basis: 100%; text-align: center; } .koth-side { max-width: none; } }

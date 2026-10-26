@@ -6,6 +6,7 @@
  *   Timeline        - place songs in your on-screen timeline
  *   Whose Playlist? - guess which player's playlist a song is from
  *   Older or Newer  - is this song older or newer than the last one?
+ *   King of the Hill - the playlists' top 32 artists face off, bracket style
  *
  * Runs fully in the browser. Spotify sign-in uses the PKCE flow, so no client
  * secret is needed (or allowed) here.
@@ -50,6 +51,7 @@ const TIMELINE_GOAL = 20;
 const SOLO_LIVES = 6;          // Timeline solo: wrong placements allowed
 const OLDER_NEWER_LIVES = 2;   // Older or Newer solo: misses allowed
 const ALBUM_CHOICES = 5;       // Match the Album: albums to pick from
+const KOTH_SIZE = 32;          // King of the Hill: artists in a full bracket
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
   "August", "September", "October", "November", "December"];
 const PLAYER_COLORS = ["var(--p0)", "var(--p1)", "var(--p2)", "var(--p3)", "var(--p4)", "var(--p5)"];
@@ -88,6 +90,10 @@ const MODES = {
     name: "Older or Newer", color: "var(--p5)", solo: true,
     desc: "Is this song older or newer than the last one?",
     soloDesc: "Is each song older or newer than the last? Two misses and it's over.",
+  },
+  koth: {
+    name: "King of the Hill", color: "var(--p3)", solo: true,
+    desc: "The top 32 artists across your playlists face off, bracket style. Pick the better one each time until one is left.",
   },
 };
 
@@ -362,8 +368,8 @@ function exportDeck(cards, source) {
     name: "Jukemonster default",
     source,
     saved: new Date().toISOString().slice(0, 10),
-    cards: cards.map(({ title, artists, year, month, track_id, duration_ms, album_uri }) =>
-      ({ title, artists, year, month, track_id, duration_ms, album_uri })),
+    cards: cards.map(({ title, artists, main_artist, year, month, track_id, duration_ms, album_uri }) =>
+      ({ title, artists, main_artist, year, month, track_id, duration_ms, album_uri })),
   };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(deck)], { type: "application/json" }));
@@ -384,6 +390,7 @@ function trackCard(t) {
   return {
     title: t.name || "Unknown Title",
     artists: (t.artists || []).map((a) => a.name).join(", ") || "Unknown Artist",
+    main_artist: ((t.artists || [])[0] || {}).name || "",
     year,
     month,
     track_id: t.id,
@@ -505,6 +512,7 @@ async function fetchPlaylistCards(id) {
       cards.push({
         title: t.name || "Unknown Title",
         artists: (t.artists || []).map((a) => a.name).join(", ") || "Unknown Artist",
+        main_artist: ((t.artists || [])[0] || {}).name || "",
         year,
         month,
         track_id: t.id,
@@ -1356,7 +1364,7 @@ function renderOptions() {
       }));
     }
   }
-  $("mix-row").classList.toggle("hidden", !!state.solo || state.mode === "whose");
+  $("mix-row").classList.toggle("hidden", !!state.solo || state.mode === "whose" || state.mode === "koth");
   $("opt-mix").checked = state.mix;
   $("opt-months").checked = state.months;
   $("opt-reduce").checked = state.reduce;
@@ -1378,6 +1386,9 @@ function startProblem() {
   if (loads.some((l) => l.status === "err")) return "One of the playlists can't be used. Pick another.";
   if (state.mode === "whose" && new Set(state.picks.slice(0, activeCount())).size < activeCount()) {
     return "Whose Playlist? needs every player to pick a different playlist.";
+  }
+  if (state.mode === "koth" && kothArtists(activeLoads().flatMap((l) => l.cards)).length < 4) {
+    return "King of the Hill needs songs by at least 4 different artists.";
   }
   if (!state.heard) return "Press Test Audio and check you can hear music.";
   return "";
@@ -1475,6 +1486,7 @@ function newGame() {
     game.active = 0;
   }
   if (game.mode === "oldernewer") game.reference = drawCard();
+  if (game.mode === "koth") game.koth = newBracket([...merged.values()]);
 
   setStatus($("play-status"), "");
   clearGuess();
@@ -1713,6 +1725,82 @@ function onAlbumPick(id) {
   reveal({ ok, text: ok ? "✓ Right album!" : "✗ Wrong album" });
 }
 
+// ---------------------------------------------------------------------
+// King of the Hill
+// ---------------------------------------------------------------------
+// Artists by how many songs they have across all the playlists (ties by name).
+// Songs count for their first-listed artist.
+function kothArtists(cards) {
+  const byName = new Map();
+  const seen = new Set();
+  for (const c of cards) {
+    if (seen.has(c.track_id)) continue;
+    seen.add(c.track_id);
+    const name = c.main_artist || c.artists.split(", ")[0];
+    if (!byName.has(name)) byName.set(name, { name, songs: [] });
+    byName.get(name).songs.push(c);
+  }
+  return [...byName.values()].sort((a, b) => b.songs.length - a.songs.length || a.name.localeCompare(b.name));
+}
+
+// Seeds 1..n in bracket order, so 1 meets n first and 1 and 2 can only meet in the final.
+function bracketOrder(n) {
+  let seeds = [1];
+  while (seeds.length < n) {
+    const size = seeds.length * 2;
+    seeds = seeds.flatMap((s) => [s, size + 1 - s]);
+  }
+  return seeds;
+}
+
+// The biggest full bracket there are artists for: 32, else 16, 8 or 4.
+function newBracket(cards) {
+  const artists = kothArtists(cards);
+  let size = KOTH_SIZE;
+  while (size > artists.length) size /= 2;
+  const top = artists.slice(0, size).map((a, i) => ({ ...a, seed: i + 1 }));
+  return { size, round: bracketOrder(size).map((s) => top[s - 1]), next: [], match: 0, results: [], out: [] };
+}
+
+function roundName(n) {
+  return n === 2 ? "Final" : n === 4 ? "Semi-finals" : n === 8 ? "Quarter-finals" : `Round of ${n}`;
+}
+
+function onKothPick(side) {
+  const k = game.koth;
+  const a = k.round[k.match * 2], b = k.round[k.match * 2 + 1];
+  const winner = side ? b : a, loser = side ? a : b;
+  playback.pause();
+  setStatus($("play-status"), "");
+  k.results.push({ round: k.round.length, a, b, winner });
+  k.out.unshift(loser); // knocked out later = placed higher
+  k.next.push(winner);
+  k.match++;
+  if (k.match * 2 >= k.round.length) {
+    if (k.next.length === 1) { endGame(`${winner.name} is King of the Hill!`); return; }
+    k.round = k.next;
+    k.next = [];
+    k.match = 0;
+  }
+  renderGame();
+}
+
+// Plays a random song by one of the two artists, so you can remember what they sound like.
+async function onKothListen(artist) {
+  const card = artist.songs[Math.floor(Math.random() * artist.songs.length)];
+  if (card.start == null) card.start = randomStart(card);
+  const note = (text) => setStatus($("play-status"), text);
+  note(`Starting a song by ${artist.name}...`);
+  try {
+    if (!(await playback.play(card, card.start, note))) return;
+    game.barStart = performance.now() - playback.late;
+    game.barMs = FULL_PLAY_MS;
+    note(`Playing "${card.title}" by ${artist.name}`);
+  } catch (err) {
+    setStatus($("play-status"), err.message, "err");
+  }
+}
+
 // A song that never started can be swapped for another without using up the turn.
 function onSkipSong() {
   playback.pause();
@@ -1899,6 +1987,22 @@ function endGame(reason) {
   $("controls").replaceChildren();
   const ranked = game.players.slice().sort((a, b) => scoreOf(b) - scoreOf(a));
   let sub;
+  if (game.mode === "koth") {
+    // Champion, runner-up, then the semi-finalists.
+    const k = game.koth;
+    $("end-sub").textContent = reason;
+    const list = $("end-list");
+    list.replaceChildren();
+    [k.next[0], ...k.out.slice(0, 3)].forEach((a, i) => {
+      const li = el("li");
+      li.style.setProperty("--c", PLAYER_COLORS[i]);
+      li.append(el("span", "pos", String(i < 2 ? i + 1 : 3)), el("span", "who", a.name),
+        el("span", "", `seed ${a.seed} · ${a.songs.length} ${a.songs.length === 1 ? "song" : "songs"}`));
+      list.append(li);
+    });
+    showScreen("screen-end");
+    return;
+  }
   if (game.solo) {
     const p = game.players[0];
     // Timeline and Older or Newer got more lives in October 2026, so their bests start fresh.
@@ -1941,7 +2045,14 @@ function renderGame(popIndex = -1) {
     const round = Math.min(g.rounds, Math.min(...g.players.map((x) => x.turns)) + 1);
     deckText = (g.solo ? `Song ${round} of ${g.rounds}` : `Round ${round} of ${g.rounds}`) + " · " + deckText;
   }
+  if (g.mode === "koth") {
+    const k = g.koth;
+    deckText = `${roundName(k.round.length)} · Match ${k.match + 1} of ${k.round.length / 2}`;
+  }
   $("deck-label").textContent = deckText;
+  $("scoreboard").classList.toggle("hidden", g.mode === "koth");
+  document.querySelector(".card-wrap").classList.toggle("hidden", g.mode === "koth");
+  document.querySelector(".stage .bar").classList.toggle("hidden", g.mode === "koth");
 
   renderScoreboard(popIndex);
 
@@ -1955,14 +2066,16 @@ function renderGame(popIndex = -1) {
     timeline: g.phase === "playing" ? ", tap where this song goes" : "'s turn",
     whose: ", whose playlist is this on?",
     oldernewer: ", older or newer than the last song?",
+    koth: "",
   };
   const soloPrompts = {
     guess: "Name that song!",
     album: "Which album is this song from?",
     timeline: g.phase === "playing" ? "Tap where this song goes" : "Your turn",
     oldernewer: "Older or newer than the last song?",
+    koth: "Who's better?",
   };
-  if (g.solo) line.textContent = soloPrompts[g.mode];
+  if (g.solo || g.mode === "koth") line.textContent = soloPrompts[g.mode];
   else line.append(el("b", "", p.name), document.createTextNode(prompts[g.mode]));
 
   // Older or Newer reference
@@ -2106,6 +2219,22 @@ function renderControls() {
       c.append(albumGrid());
       break;
 
+    case "koth": {
+      const k = g.koth;
+      const pair = [k.round[k.match * 2], k.round[k.match * 2 + 1]];
+      pair.forEach((a, side) => {
+        if (side) c.append(el("div", "koth-vs", "vs"));
+        const box = el("div", "koth-side");
+        box.style.setProperty("--c", PLAYER_COLORS[side ? 3 : 0]);
+        const pick = button("", "koth-pick", () => onKothPick(side));
+        pick.append(el("b", "", a.name), el("small", "", `seed ${a.seed} · ${a.songs.length} ${a.songs.length === 1 ? "song" : "songs"}`));
+        box.append(pick, button("▶ Hear a song", "tiny", () => onKothListen(a)));
+        c.append(box);
+      });
+      hint.textContent = "Tap the better artist. Not sure? Hear a song by each first.";
+      break;
+    }
+
     case "oldernewer":
       if (revealed) c.append(button(nextLabel, "primary", finishTurn));
       else if (!has) c.append(playBtn());
@@ -2139,11 +2268,12 @@ function albumGrid() {
 function renderTimelines() {
   const g = game;
   const wrap = $("timelines");
-  const show = g.mode === "timeline";
+  const show = g.mode === "timeline" || g.mode === "koth";
   wrap.classList.toggle("hidden", !show);
   $("play-grid").classList.toggle("with-timelines", show);
   if (!show) return;
   wrap.replaceChildren();
+  if (g.mode === "koth") { renderBracket(wrap); return; }
   // Active player first on small screens is handled by order; keep seating order here.
   g.players.forEach((p, i) => {
     const active = i === g.active;
@@ -2170,6 +2300,26 @@ function renderTimelines() {
     row.append(head, cards);
     wrap.append(row);
   });
+}
+
+// This round's matches: winners so far, the one being played, and the ones still to come.
+function renderBracket(wrap) {
+  const k = game.koth;
+  const box = el("div", "tl active");
+  box.style.setProperty("--c", "var(--p3)");
+  const head = el("div", "tl-head");
+  head.append(el("b", "", roundName(k.round.length)), el("span", "", `${k.next.length} of ${k.round.length / 2} decided`));
+  const list = el("ol", "bracket");
+  for (let m = 0; m < k.round.length / 2; m++) {
+    const a = k.round[m * 2], b = k.round[m * 2 + 1];
+    const won = m < k.match ? k.next[m] : null;
+    const li = el("li", m === k.match ? "now" : "");
+    const name = (x) => el("span", won ? (won === x ? "won" : "lost") : "", x.name);
+    li.append(name(a), el("i", "", " vs "), name(b));
+    list.append(li);
+  }
+  box.append(head, list);
+  wrap.append(box);
 }
 
 function tickBar() {
