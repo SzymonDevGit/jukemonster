@@ -1453,7 +1453,7 @@ function newGame() {
     months: state.months,
     rounds: lengthValue(),
     players: Array.from({ length: n }, (_, i) => ({
-      name: playerName(i), color: PLAYER_COLORS[i], score: 0, turns: 0, timeline: [],
+      name: playerName(i), color: PLAYER_COLORS[i], score: 0, right: 0, turns: 0, timeline: [],
       lives: state.mode === "oldernewer" ? OLDER_NEWER_LIVES : SOLO_LIVES,
     })),
     useShared: state.solo || state.mix || state.mode === "whose" || samePicks,
@@ -1487,6 +1487,13 @@ function newGame() {
   }
   if (game.mode === "oldernewer") game.reference = drawCard();
   if (game.mode === "koth") game.koth = newBracket([...merged.values()]);
+  // For the share card: where the songs came from.
+  const picks = [...new Set(state.picks.slice(0, n))];
+  const meta = picks.length === 1 && picks[0] !== DEFAULT_ID && (state.playlists || []).find((p) => p.id === picks[0]);
+  game.source = {
+    name: picks.length > 1 ? `${picks.length} playlists` : picks[0] === DEFAULT_ID ? "the Jukemonster top hits" : meta ? `"${meta.name}"` : "a playlist",
+    songs: merged.size,
+  };
 
   setStatus($("play-status"), "");
   clearGuess();
@@ -1721,7 +1728,7 @@ function onAlbumPick(id) {
   if (!a || game.phase !== "playing") return;
   a.picked = id;
   const ok = id === a.right;
-  if (ok) game.players[game.active].score++;
+  if (ok) { game.players[game.active].score++; game.players[game.active].right++; }
   reveal({ ok, text: ok ? "✓ Right album!" : "✗ Wrong album" });
 }
 
@@ -1853,6 +1860,7 @@ function onTypedGuess(pick) {
   const p = game.players[game.active];
   const points = ok ? LEVELS[game.level - 1].points : 0;
   p.score += points;
+  if (ok) p.right++;
   game.typed = true;
   clearGuess();
   reveal({ ok, text: ok ? "✓ Right song!" : `✗ Not "${pick.title}"` });
@@ -1905,6 +1913,7 @@ function onGuessJudged(correct) {
   const p = game.players[game.active];
   const points = correct ? LEVELS[game.level - 1].points : 0;
   p.score += points;
+  if (correct) p.right++;
   setStatus($("play-status"), correct ? `${p.name} +${points} ${points === 1 ? "point" : "points"}` : `No points for ${p.name}`, correct ? "ok" : "");
   finishTurn();
 }
@@ -2000,6 +2009,7 @@ function endGame(reason) {
         el("span", "", `seed ${a.seed} · ${a.songs.length} ${a.songs.length === 1 ? "song" : "songs"}`));
       list.append(li);
     });
+    showShare(kothShareText());
     showScreen("screen-end");
     return;
   }
@@ -2020,6 +2030,7 @@ function endGame(reason) {
     sub = `${reason} ${winners.length > 1 ? `It's a tie between ${winners.join(" and ")}!` : `${winners[0]} wins!`}`;
   }
   $("end-sub").textContent = sub;
+  showShare(game.solo ? soloShareText() : "");
   const list = $("end-list");
   list.replaceChildren();
   ranked.forEach((p, i) => {
@@ -2029,6 +2040,74 @@ function endGame(reason) {
     list.append(li);
   });
   showScreen("screen-end");
+}
+
+// ---------------------------------------------------------------------
+// Share card: an ASCII score card (or King of the Hill bracket) to paste anywhere
+// ---------------------------------------------------------------------
+const GAME_LINK = REDIRECT_URI;
+const TAPE = [
+  " ______________________ ",
+  "|  __________________  |",
+  "| |   JUKEMONSTER    | |",
+  "| |__________________| |",
+  "|    (@)        (@)    |",
+  "|______________________|",
+];
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function soloShareText() {
+  const p = game.players[0];
+  const src = game.source || { name: "a playlist", songs: 0 };
+  const from = `from ${src.name} (${plural(src.songs, "song")})`;
+  const lines = {
+    guess: [`I named ${p.right} of ${plural(p.turns, "song")}`, `for ${plural(p.score, "point")}`],
+    album: [`I matched ${p.right} of ${plural(p.turns, "song")}`, "to the right album"],
+    timeline: [`I built a timeline of ${plural(p.timeline.length, "card")}`, "in the right order"],
+    oldernewer: [`I called ${p.score} older-or-newer`, `${p.score === 1 ? "song" : "songs"} right`],
+  }[game.mode] || [`I scored ${p.score}`];
+  return [...TAPE, "", `${MODES[game.mode].name}:`, ...lines, from, "", "Think you can beat it?", GAME_LINK].join("\n");
+}
+
+// The last four as an ASCII bracket: semi-finals, final, champion.
+function kothShareText() {
+  const k = game.koth;
+  const semis = k.results.filter((r) => r.round === 4);
+  const final = k.results.find((r) => r.round === 2);
+  const names = semis.flatMap((r) => [r.a.name, r.b.name]);
+  const w = Math.min(16, Math.max(...names.map((n) => n.length)));
+  const pad = (n) => (n.length > w ? n.slice(0, w - 1) + "~" : n.padEnd(w));
+  const sp = (n) => " ".repeat(n);
+  const half = (r, top) => {
+    const first = `${pad(r.a.name)} -+`;
+    const mid = `${sp(w)}  +-- ${pad(r.winner.name)} -+`;
+    const last = `${pad(r.b.name)} -+${sp(w + 5)}|`;
+    return top ? [first, mid, last] : [`${pad(r.a.name)} -+${sp(w + 5)}|`, mid, `${pad(r.b.name)} -+`];
+  };
+  const bracket = [...half(semis[0], true), `${sp(2 * w + 8)}+==> ${final.winner.name}`, ...half(semis[1], false)];
+  const src = game.source || { name: "my playlists", songs: 0 };
+  return ["KING OF THE HILL", `Top ${k.size} artists from ${src.name}`, "", ...bracket, "",
+    `My king: ${final.winner.name}. Who's yours?`, GAME_LINK].join("\n");
+}
+
+function showShare(text) {
+  $("share").classList.toggle("hidden", !text);
+  $("share-text").textContent = text;
+  $("copy-btn").textContent = "Copy";
+  $("share-btn").classList.toggle("hidden", !navigator.share);
+}
+
+async function onCopyShare() {
+  const text = $("share-text").textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    $("copy-btn").textContent = "Copied!";
+  } catch {
+    window.prompt("Copy this:", text);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -2375,6 +2454,8 @@ function wire() {
 
   $("back-btn").addEventListener("click", () => { playback.pause(); renderSetup(); showScreen("screen-setup"); });
   $("again-btn").addEventListener("click", newGame);
+  $("copy-btn").addEventListener("click", onCopyShare);
+  $("share-btn").addEventListener("click", () => navigator.share({ text: $("share-text").textContent }).catch(() => {}));
   $("change-btn").addEventListener("click", () => { renderSetup(); showScreen("screen-setup"); });
 }
 
