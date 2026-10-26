@@ -21,7 +21,7 @@ Before starting, press **Test Audio** and **Heard it!** to check sound. Music pl
 
 ## Your Spotify app
 
-Jukemonster has no Spotify app of its own: each host makes a free one (needs Spotify Premium), and the sign-in screen walks through it the first time. In the [Spotify developer dashboard](https://developer.spotify.com/dashboard), create an app and add the address you open Jukemonster at as a **Redirect URI**, exactly, with the trailing slash:
+Jukemonster has no Spotify app of its own: each host makes a free one (needs Spotify Premium), and the sign-in screen walks through it the first time. In the [Spotify developer dashboard](https://developer.spotify.com/dashboard), create an app (no Create app button? use [developer.spotify.com/dashboard/create](https://developer.spotify.com/dashboard/create)) and add the address you open Jukemonster at as a **Redirect URI**, exactly, with the trailing slash:
 
 - `http://127.0.0.1:8000/` for running it on your own PC
 - `https://jukemonster.szy.monster/` for the live site
