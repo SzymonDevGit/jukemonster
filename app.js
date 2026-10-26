@@ -2420,6 +2420,10 @@ function wire() {
   $("own-save").addEventListener("click", onOwnAppSave);
   $("own-id").addEventListener("keydown", (e) => { if (e.key === "Enter") onOwnAppSave(); });
   renderOwnApp();
+  // Phones play through the Spotify app, whose notification shows the song's name.
+  const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+  document.querySelectorAll(".phone-note").forEach((p) => p.classList.toggle("hidden", !phone));
   $("logout-link").addEventListener("click", (e) => { e.preventDefault(); logout(); });
 
   $("pick-solo").addEventListener("click", () => setSolo(true));
