@@ -242,3 +242,4 @@ button.score { cursor: pointer; }
 .guess-list li:first-child button { border-top-width: 2px; }
 .guess-list button:hover, .guess-list button:focus-visible { background: var(--amber); outline: none; }
 .guess-list .a { color: var(--muted); }
+.safe-note { border-left: 3px solid var(--teal); padding-left: 10px; overflow-wrap: anywhere; }
