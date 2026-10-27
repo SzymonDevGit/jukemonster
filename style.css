@@ -261,3 +261,5 @@ button.score { cursor: pointer; }
 .share { width: 100%; max-width: 420px; margin: 0 0 18px; }
 .share-text { font-family: var(--mono); font-size: 12px; line-height: 1.35; text-align: left; background: var(--card); border: 2px dashed var(--ink); border-radius: 4px; padding: 12px; margin: 0 0 10px; overflow-x: auto; white-space: pre; }
 .play-help { margin: 10px 0; }
+.koth-undo { flex-basis: 100%; display: flex; justify-content: flex-end; margin-bottom: -6px; }
+.controls .koth-undo .link-btn { min-width: 0; background: none; border: 0; box-shadow: none; padding: 2px 4px; font-size: 13px; color: var(--muted); text-decoration: underline; cursor: pointer; }

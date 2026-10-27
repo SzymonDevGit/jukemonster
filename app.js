@@ -2459,6 +2459,7 @@ function renderControls() {
     case "koth": {
       const k = g.koth;
       const pair = [k.round[k.match * 2], k.round[k.match * 2 + 1]];
+      if (k.undo.length) { const row = el("div", "koth-undo"); row.append(button("↶ Undo", "link-btn", onKothUndo)); c.append(row); }
       pair.forEach((a, side) => {
         if (side) c.append(el("div", "koth-vs", "vs"));
         const box = el("div", "koth-side");
@@ -2468,7 +2469,6 @@ function renderControls() {
         box.append(pick, button(k.kind === "songs" ? "▶ Hear it" : "▶ Hear a song", "tiny", () => onKothListen(a)));
         c.append(box);
       });
-      if (k.undo.length) c.append(button("↶ Undo last pick", "tiny", onKothUndo));
       hint.textContent = k.kind === "songs" ? "Tap the better song. Not sure? Hear them first." : "Tap the better artist. Not sure? Hear a song by each first.";
       break;
     }
