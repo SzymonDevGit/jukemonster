@@ -1902,7 +1902,7 @@ function newBracket(cards, kind, pick, players) {
   const top = entries.slice(0, size).map((a, i) => ({ ...a, seed: i + 1 }));
   // Random brackets are shuffled, so there are no seeds to keep apart.
   const order = pick === "random" ? top.map((_, i) => i + 1) : bracketOrder(size);
-  return { size, kind, pick, players, round: order.map((s) => top[s - 1]), next: [], match: 0, results: [], out: [] };
+  return { size, kind, pick, players, round: order.map((s) => top[s - 1]), next: [], match: 0, results: [], out: [], undo: [] };
 }
 
 // The small print under a name: who it's by or how many songs, and how many players share it.
@@ -1923,6 +1923,7 @@ function onKothPick(side) {
   const winner = side ? b : a, loser = side ? a : b;
   playback.pause();
   setStatus($("play-status"), "");
+  k.undo.push({ round: k.round, next: [...k.next], match: k.match });
   k.results.push({ round: k.round.length, a, b, winner });
   k.out.unshift(loser); // knocked out later = placed higher
   k.next.push(winner);
@@ -1933,6 +1934,19 @@ function onKothPick(side) {
     k.next = [];
     k.match = 0;
   }
+  renderGame();
+}
+
+// Takes back the last pick, even across rounds.
+function onKothUndo() {
+  const k = game.koth;
+  const last = k.undo.pop();
+  if (!last) return;
+  playback.pause();
+  setStatus($("play-status"), "");
+  Object.assign(k, last);
+  k.results.pop();
+  k.out.shift();
   renderGame();
 }
 
@@ -2454,6 +2468,7 @@ function renderControls() {
         box.append(pick, button(k.kind === "songs" ? "▶ Hear it" : "▶ Hear a song", "tiny", () => onKothListen(a)));
         c.append(box);
       });
+      if (k.undo.length) c.append(button("↶ Undo last pick", "tiny", onKothUndo));
       hint.textContent = k.kind === "songs" ? "Tap the better song. Not sure? Hear them first." : "Tap the better artist. Not sure? Hear a song by each first.";
       break;
     }
