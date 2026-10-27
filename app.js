@@ -1043,6 +1043,8 @@ const state = {
   months: !!saved.months,
   reduce: !!saved.reduce,
   dedupe: saved.dedupe || "popularity",
+  kothKind: saved.kothKind === "songs" ? "songs" : "artists", // King of the Hill: what's in the bracket
+  kothPick: saved.kothPick === "random" ? "random" : "top",   // King of the Hill: top 32 or random 32
   // Game lengths were doubled in October 2026, so double lengths saved before then too.
   lengths: saved.lengthsDoubled ? saved.lengths || {}
     : Object.fromEntries(Object.entries(saved.lengths || {}).map(([k, v]) => [k, v * 2])),
@@ -1054,8 +1056,8 @@ const state = {
 };
 
 function saveSetup() {
-  const { solo, mode, numPlayers, names, picks, mix, months, reduce, dedupe, lengths } = state;
-  store.set("jm_setup2", { solo, mode, numPlayers, names, picks, mix, months, reduce, dedupe, lengths, lengthsDoubled: true });
+  const { solo, mode, numPlayers, names, picks, mix, months, reduce, dedupe, lengths, kothKind, kothPick } = state;
+  store.set("jm_setup2", { solo, mode, numPlayers, names, picks, mix, months, reduce, dedupe, lengths, kothKind, kothPick, lengthsDoubled: true });
 }
 
 function activeCount() {
@@ -1414,6 +1416,12 @@ async function refreshDevices() {
 }
 
 function renderOptions() {
+  const koth = state.mode === "koth";
+  $("koth-rows").classList.toggle("hidden", !koth);
+  $("koth-artists").classList.toggle("active", state.kothKind === "artists");
+  $("koth-songs").classList.toggle("active", state.kothKind === "songs");
+  $("koth-top").classList.toggle("active", state.kothPick === "top");
+  $("koth-random").classList.toggle("active", state.kothPick === "random");
   const len = lengthSetting();
   $("length-row").classList.toggle("hidden", !len);
   if (len) {
@@ -1455,8 +1463,8 @@ function startProblem() {
   if (state.mode === "album" && !albumArtists(activeLoads().flatMap((l) => l.cards)).size) {
     return "Match the Album needs an artist with songs from at least 3 of their albums in the playlists.";
   }
-  if (state.mode === "koth" && kothArtists(activeLoads().flatMap((l) => l.cards)).length < 4) {
-    return "King of the Hill needs songs by at least 4 different artists.";
+  if (state.mode === "koth" && kothEntries(activeLoads().flatMap((l) => l.cards), state.kothKind, "top").length < 4) {
+    return state.kothKind === "songs" ? "King of the Hill needs at least 4 songs." : "King of the Hill needs songs by at least 4 different artists.";
   }
   if (!state.heard) return "Press Test Audio and check you can hear music.";
   return "";
@@ -1554,7 +1562,7 @@ function newGame() {
     game.active = 0;
   }
   if (game.mode === "oldernewer") game.reference = drawCard();
-  if (game.mode === "koth") game.koth = newBracket([...merged.values()]);
+  if (game.mode === "koth") game.koth = newBracket([...merged.values()], state.kothKind, state.kothPick, n);
   if (game.mode === "album") {
     // Only artists with 3+ of their albums in the playlists, so those albums can all be choices.
     game.artistAlbums = albumArtists([...merged.values()]);
@@ -1838,19 +1846,25 @@ function onAlbumPick(id) {
 // ---------------------------------------------------------------------
 // King of the Hill
 // ---------------------------------------------------------------------
-// Artists by how many songs they have across all the playlists (ties by name).
-// Songs count for their first-listed artist.
-function kothArtists(cards) {
-  const byName = new Map();
-  const seen = new Set();
+// What can go in the bracket: artists (each song counts for its first-listed artist) or songs.
+// "top" puts what the most players have in their playlists first (then, for artists, the most
+// songs), ties in random order; "random" is any mix.
+function kothEntries(cards, kind, pick) {
+  const byKey = new Map();
   for (const c of cards) {
-    if (seen.has(c.track_id)) continue;
-    seen.add(c.track_id);
-    const name = c.main_artist || c.artists.split(", ")[0];
-    if (!byName.has(name)) byName.set(name, { name, songs: [] });
-    byName.get(name).songs.push(c);
+    const key = kind === "songs" ? c.track_id : mainArtist(c);
+    if (!byKey.has(key)) {
+      byKey.set(key, kind === "songs"
+        ? { name: c.title, by: c.artists, songs: [], owners: new Set() }
+        : { name: key, songs: [], owners: new Set() });
+    }
+    const e = byKey.get(key);
+    if (!e.songs.includes(c)) e.songs.push(c);
+    (c.owners || [0]).forEach((o) => e.owners.add(o));
   }
-  return [...byName.values()].sort((a, b) => b.songs.length - a.songs.length || a.name.localeCompare(b.name));
+  const list = shuffle([...byKey.values()]);
+  if (pick === "top") list.sort((a, b) => b.owners.size - a.owners.size || b.songs.length - a.songs.length);
+  return list;
 }
 
 // Seeds 1..n in bracket order, so 1 meets n first and 1 and 2 can only meet in the final.
@@ -1863,13 +1877,23 @@ function bracketOrder(n) {
   return seeds;
 }
 
-// The biggest full bracket there are artists for: 32, else 16, 8 or 4.
-function newBracket(cards) {
-  const artists = kothArtists(cards);
+// The biggest full bracket there's enough for: 32, else 16, 8 or 4.
+function newBracket(cards, kind, pick, players) {
+  const entries = kothEntries(cards, kind, pick);
   let size = KOTH_SIZE;
-  while (size > artists.length) size /= 2;
-  const top = artists.slice(0, size).map((a, i) => ({ ...a, seed: i + 1 }));
-  return { size, round: bracketOrder(size).map((s) => top[s - 1]), next: [], match: 0, results: [], out: [] };
+  while (size > entries.length) size /= 2;
+  const top = entries.slice(0, size).map((a, i) => ({ ...a, seed: i + 1 }));
+  // Random brackets are shuffled, so there are no seeds to keep apart.
+  const order = pick === "random" ? top.map((_, i) => i + 1) : bracketOrder(size);
+  return { size, kind, pick, players, round: order.map((s) => top[s - 1]), next: [], match: 0, results: [], out: [] };
+}
+
+// The small print under a name: who it's by or how many songs, and how many players share it.
+function kothDetail(a) {
+  const k = game.koth;
+  const parts = [k.pick === "top" ? `seed ${a.seed}` : "", k.kind === "songs" ? a.by : plural(a.songs.length, "song")];
+  if (k.players > 1) parts.push(`on ${a.owners.size} of ${k.players} playlists`);
+  return parts.filter(Boolean).join(" · ");
 }
 
 function roundName(n) {
@@ -1895,17 +1919,17 @@ function onKothPick(side) {
   renderGame();
 }
 
-// Plays a random song by one of the two artists, so you can remember what they sound like.
-async function onKothListen(artist) {
-  const card = artist.songs[Math.floor(Math.random() * artist.songs.length)];
+// Plays the song, or a random song by the artist, so you can remember what it sounds like.
+async function onKothListen(entry) {
+  const card = entry.songs[Math.floor(Math.random() * entry.songs.length)];
   if (card.start == null) card.start = randomStart(card);
   const note = (text) => setStatus($("play-status"), text);
-  note(`Starting a song by ${artist.name}...`);
+  note(`Starting "${card.title}"...`);
   try {
     if (!(await playback.play(card, card.start, note))) return;
     game.barStart = performance.now() - playback.late;
     game.barMs = FULL_PLAY_MS;
-    note(`Playing "${card.title}" by ${artist.name}`);
+    note(`Playing "${card.title}" by ${card.artists}`);
   } catch (err) {
     setStatus($("play-status"), err.message, "err");
   }
@@ -2109,8 +2133,7 @@ function endGame(reason) {
     [k.next[0], ...k.out.slice(0, 3)].forEach((a, i) => {
       const li = el("li");
       li.style.setProperty("--c", PLAYER_COLORS[i]);
-      li.append(el("span", "pos", String(i < 2 ? i + 1 : 3)), el("span", "who", a.name),
-        el("span", "", `seed ${a.seed} · ${a.songs.length} ${a.songs.length === 1 ? "song" : "songs"}`));
+      li.append(el("span", "pos", String(i < 2 ? i + 1 : 3)), el("span", "who", a.name), el("span", "", kothDetail(a)));
       list.append(li);
     });
     showShare(kothShareText());
@@ -2193,7 +2216,7 @@ function kothShareText() {
   };
   const bracket = [...half(semis[0], true), `${sp(2 * w + 8)}+==> ${final.winner.name}`, ...half(semis[1], false)];
   const src = game.source || { name: "my playlists", songs: 0 };
-  return ["KING OF THE HILL", `Top ${k.size} artists from ${src.name}`, "", ...bracket, "",
+  return ["KING OF THE HILL", `${k.pick === "random" ? "Random" : "Top"} ${k.size} ${k.kind} from ${src.name}`, "", ...bracket, "",
     `My king: ${final.winner.name}. Who's yours?`, GAME_LINK].join("\n");
 }
 
@@ -2410,11 +2433,11 @@ function renderControls() {
         const box = el("div", "koth-side");
         box.style.setProperty("--c", PLAYER_COLORS[side ? 3 : 0]);
         const pick = button("", "koth-pick", () => onKothPick(side));
-        pick.append(el("b", "", a.name), el("small", "", `seed ${a.seed} · ${a.songs.length} ${a.songs.length === 1 ? "song" : "songs"}`));
-        box.append(pick, button("▶ Hear a song", "tiny", () => onKothListen(a)));
+        pick.append(el("b", "", a.name), el("small", "", kothDetail(a)));
+        box.append(pick, button(k.kind === "songs" ? "▶ Hear it" : "▶ Hear a song", "tiny", () => onKothListen(a)));
         c.append(box);
       });
-      hint.textContent = "Tap the better artist. Not sure? Hear a song by each first.";
+      hint.textContent = k.kind === "songs" ? "Tap the better song. Not sure? Hear them first." : "Tap the better artist. Not sure? Hear a song by each first.";
       break;
     }
 
@@ -2550,6 +2573,11 @@ function wire() {
   $("opt-reduce").addEventListener("change", (e) => { state.reduce = e.target.checked; saveSetup(); renderOptions(); });
   $("mode-popular").addEventListener("click", () => { state.dedupe = "popularity"; saveSetup(); renderOptions(); });
   $("mode-recent").addEventListener("click", () => { state.dedupe = "recent"; saveSetup(); renderOptions(); });
+  const kothOpt = (id, key, value) => $(id).addEventListener("click", () => { state[key] = value; saveSetup(); renderOptions(); updateStart(); });
+  kothOpt("koth-artists", "kothKind", "artists");
+  kothOpt("koth-songs", "kothKind", "songs");
+  kothOpt("koth-top", "kothPick", "top");
+  kothOpt("koth-random", "kothPick", "random");
   $("start-btn").addEventListener("click", () => { if (!startProblem()) newGame(); });
 
   $("guess-input").addEventListener("input", renderGuessList);
