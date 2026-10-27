@@ -7,6 +7,7 @@
  *   Whose Playlist? - guess which player's playlist a song is from
  *   Older or Newer  - is this song older or newer than the last one?
  *   King of the Hill - the playlists' top 32 artists face off, bracket style
+ *   Discovery       - take turns picking 1 of 5 songs from your playlist for everyone
  *
  * Runs fully in the browser. Spotify sign-in uses the PKCE flow, so no client
  * secret is needed (or allowed) here.
@@ -28,6 +29,8 @@ const SCOPES = [
   "user-read-private",
   "user-read-email",
 ].join(" ");
+// Asked for only when someone saves a Discovery playlist.
+const SAVE_SCOPES = "playlist-modify-private playlist-modify-public";
 // Must match a Redirect URI in the Spotify dashboard exactly.
 const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, "");
 
@@ -95,6 +98,10 @@ const MODES = {
     name: "King of the Hill", color: "var(--p3)", solo: true,
     desc: "The top 32 artists across your playlists face off, bracket style. Pick the better one each time until one is left.",
   },
+  discovery: {
+    name: "Discovery", color: "var(--p1)", solo: false,
+    desc: "Take turns sharing music. Pick 1 of 5 songs from your playlist and everyone listens.",
+  },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -135,7 +142,7 @@ async function codeChallenge(verifier) {
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function startLogin() {
+async function startLogin(extra = "") {
   if (!CLIENT_ID) return;
   const verifier = randomString(64);
   const state = randomString(16);
@@ -147,7 +154,7 @@ async function startLogin() {
     redirect_uri: REDIRECT_URI,
     code_challenge_method: "S256",
     code_challenge: await codeChallenge(verifier),
-    scope: SCOPES,
+    scope: extra ? SCOPES + " " + extra : SCOPES,
     state,
   });
   location.href = "https://accounts.spotify.com/authorize?" + params;
@@ -1094,6 +1101,7 @@ function lengthSetting() {
   if (state.mode === "guess" || state.mode === "album") {
     return state.solo ? { label: "Songs", values: [10, 20, 40], def: 20 } : { label: "Rounds", values: [6, 10, 20], def: 10 };
   }
+  if (state.mode === "discovery") return { label: "Rounds", values: [3, 5, 10], def: 5 };
   if (state.mode === "whose" || (state.mode === "oldernewer" && !state.solo)) {
     return { label: "Rounds", values: [6, 10, 20], def: 10 };
   }
@@ -1437,7 +1445,7 @@ function renderOptions() {
       }));
     }
   }
-  $("mix-row").classList.toggle("hidden", !!state.solo || state.mode === "whose" || state.mode === "koth");
+  $("mix-row").classList.toggle("hidden", !!state.solo || state.mode === "whose" || state.mode === "koth" || state.mode === "discovery");
   $("opt-mix").checked = state.mix;
   $("opt-months").checked = state.months;
   $("opt-reduce").checked = state.reduce;
@@ -1532,7 +1540,8 @@ function newGame() {
       name: playerName(i), color: PLAYER_COLORS[i], score: 0, right: 0, turns: 0, timeline: [],
       lives: state.mode === "oldernewer" ? OLDER_NEWER_LIVES : SOLO_LIVES,
     })),
-    useShared: state.solo || state.mix || state.mode === "whose" || samePicks,
+    // Discovery: everyone shares from their own playlist.
+    useShared: state.mode !== "discovery" && (state.solo || state.mix || state.mode === "whose" || samePicks),
     // Guess the Song: every song in the game, one per title and artist, for typed guesses.
     pool: [...new Map([...merged.values()].map((c) => [songKey(bareTitle(c.title)) + "|" + songKey(c.artists), c])).values()],
     typed: false,      // Guess the Song: the guess was typed in and judged already
@@ -1562,6 +1571,7 @@ function newGame() {
     game.active = 0;
   }
   if (game.mode === "oldernewer") game.reference = drawCard();
+  if (game.mode === "discovery") { game.disc = { choices: [], played: [] }; discDeal(); }
   if (game.mode === "koth") game.koth = newBracket([...merged.values()], state.kothKind, state.kothPick, n);
   if (game.mode === "album") {
     // Only artists with 3+ of their albums in the playlists, so those albums can all be choices.
@@ -1844,6 +1854,94 @@ function onAlbumPick(id) {
 }
 
 // ---------------------------------------------------------------------
+// Discovery
+// ---------------------------------------------------------------------
+// Five songs from the current player's playlist that nobody has shared yet.
+function discDeal() {
+  const old = new Set(game.disc.choices);
+  const deck = deckFor(game.active);
+  const fresh = shuffle(deck.filter((c) => !old.has(c)));
+  game.disc.choices = [...fresh, ...shuffle([...old].filter((c) => deck.includes(c)))].slice(0, 5);
+}
+
+function onDiscPick(card) {
+  const deck = deckFor(game.active);
+  deck.splice(deck.indexOf(card), 1);
+  game.players.forEach((p, i) => { if (i !== game.active) { const d = deckFor(i); const at = d.findIndex((c) => c.track_id === card.track_id); if (at >= 0) d.splice(at, 1); } });
+  game.current = card;
+  game.phase = "revealed";
+  game.disc.played.push({ card, by: game.active });
+  game.players[game.active].score++;
+  renderGame(game.active);
+  onDiscPlay();
+}
+
+// Plays the shared song from the start, all the way through.
+async function onDiscPlay() {
+  const card = game.current;
+  const note = (text) => setStatus($("play-status"), text);
+  note("Starting the music...");
+  try {
+    if (!(await playback.play(card, 0, note))) return;
+    game.barStart = performance.now() - playback.late;
+    game.barMs = card.duration_ms || FULL_PLAY_MS;
+    note(`Playing "${card.title}" by ${card.artists}`);
+  } catch (err) {
+    const g = game;
+    failedStart(err, $("play-status"), () => { if (game === g && g.current === card) onDiscPlay(); });
+  }
+}
+
+// Saves the approved songs as a new private playlist. Needs an extra permission:
+// the first time, the host signs in again and the save finishes when they're back.
+async function onSaveApproved() {
+  const uris = game.disc.played.filter((x) => x.approved).map((x) => "spotify:track:" + x.card.track_id);
+  const name = `Jukemonster Discovery ${new Date().toLocaleDateString()}`;
+  const granted = ((store.get("jm_token") || {}).scope || "").split(" ");
+  if (!granted.includes("playlist-modify-private")) {
+    store.set("jm_pending_save", { name, uris });
+    setStatus($("save-status"), "Spotify needs your OK to make playlists. Taking you to sign in...");
+    startLogin(SAVE_SCOPES);
+    return;
+  }
+  $("save-btn").disabled = true;
+  setStatus($("save-status"), "Saving...");
+  try {
+    await savePlaylist(name, uris);
+    setStatus($("save-status"), `Saved "${name}" to your Spotify.`, "ok");
+  } catch (err) {
+    $("save-btn").disabled = false;
+    setStatus($("save-status"), "Couldn't save the playlist. " + err.message, "err");
+  }
+}
+
+async function savePlaylist(name, uris) {
+  const list = await api("/me/playlists", { method: "POST", body: { name, public: false, description: "Songs we approved in a Jukemonster Discovery game." } });
+  for (let i = 0; i < uris.length; i += 100) {
+    const body = { uris: uris.slice(i, i + 100) };
+    try {
+      await api(`/playlists/${list.id}/items`, { method: "POST", body });
+    } catch (err) {
+      if (err.status !== 404) throw err;
+      await api(`/playlists/${list.id}/tracks`, { method: "POST", body }); // older API name
+    }
+  }
+}
+
+// After signing in again to save a playlist, finish the save.
+async function finishPendingSave() {
+  const pending = store.get("jm_pending_save");
+  if (!pending) return;
+  store.remove("jm_pending_save");
+  try {
+    await savePlaylist(pending.name, pending.uris);
+    setStatus($("setup-status"), `Saved "${pending.name}" to your Spotify.`, "ok");
+  } catch (err) {
+    setStatus($("setup-status"), "Couldn't save the Discovery playlist. " + err.message, "err");
+  }
+}
+
+// ---------------------------------------------------------------------
 // King of the Hill
 // ---------------------------------------------------------------------
 // What can go in the bracket: artists (each song counts for its first-listed artist) or songs.
@@ -2093,6 +2191,7 @@ function finishTurn() {
   const reason = overReason();
   if (reason) { endGame(reason); return; }
   game.active = (game.active + 1) % game.players.length;
+  if (game.mode === "discovery") discDeal();
   renderGame(game.active);
   if (game.mode !== "guess") setStatus($("play-status"), "");
 }
@@ -2111,6 +2210,7 @@ function overReason() {
     case "guess":
     case "album":
     case "whose":
+    case "discovery":
       return ps.every((p) => p.turns >= game.rounds) ? "All rounds played." : null;
     default:
       return null;
@@ -2135,6 +2235,7 @@ function scoreLabel(p) {
     case "guess":
     case "album":
     case "whose": return `${p.score} ${p.score === 1 ? "pt" : "pts"}`;
+    case "discovery": return `${p.score} shared`;
     case "timeline":
       return game.solo
         ? `${p.timeline.length} ${p.timeline.length === 1 ? "card" : "cards"} · ${"♥".repeat(Math.max(0, p.lives))}${"♡".repeat(SOLO_LIVES - Math.max(0, p.lives))}`
@@ -2151,6 +2252,7 @@ function endGame(reason) {
   playback.pause();
   keepAwake(false);
   game.over = reason;
+  $("save-row").classList.add("hidden");
   // The play screen stays up during the fade; a second click there would end the game again.
   $("controls").replaceChildren();
   const ranked = game.players.slice().sort((a, b) => scoreOf(b) - scoreOf(a));
@@ -2168,6 +2270,26 @@ function endGame(reason) {
       list.append(li);
     });
     showShare(kothShareText());
+    showScreen("screen-end");
+    return;
+  }
+  if (game.mode === "discovery") {
+    // Every song that was shared, in order, with who shared it.
+    $("end-sub").textContent = `${reason} Here's what you shared.`;
+    const list = $("end-list");
+    list.replaceChildren();
+    game.disc.played.forEach(({ card, by, approved }, i) => {
+      const li = el("li");
+      li.style.setProperty("--c", game.players[by].color);
+      li.append(el("span", "pos", String(i + 1)), el("span", "who", `${card.title} · ${card.artists}`), el("span", "", (approved ? "👍 " : "") + game.players[by].name));
+      list.append(li);
+    });
+    const approved = game.disc.played.filter((x) => x.approved);
+    $("save-row").classList.toggle("hidden", !approved.length);
+    $("save-btn").disabled = false;
+    $("save-btn").textContent = `Save ${plural(approved.length, "approved song")} as a playlist`;
+    setStatus($("save-status"), "");
+    showShare(discShareText());
     showScreen("screen-end");
     return;
   }
@@ -2251,6 +2373,11 @@ function kothShareText() {
     `My king: ${final.winner.name}. Who's yours?`, GAME_LINK].join("\n");
 }
 
+function discShareText() {
+  const lines = game.disc.played.map(({ card, by, approved }, i) => `${i + 1}. ${approved ? "[+] " : ""}${card.title} - ${card.artists} (${game.players[by].name})`);
+  return ["DISCOVERY MIX", `${plural(lines.length, "song")} from ${plural(game.players.length, "friend")}`, "", ...lines, "", "Share yours:", GAME_LINK].join("\n");
+}
+
 function showShare(text) {
   $("share").classList.toggle("hidden", !text);
   $("share-text").textContent = text;
@@ -2288,7 +2415,7 @@ function renderGame(popIndex = -1) {
   }
   $("deck-label").textContent = deckText;
   $("scoreboard").classList.toggle("hidden", g.mode === "koth");
-  document.querySelector(".card-wrap").classList.toggle("hidden", g.mode === "koth");
+  document.querySelector(".card-wrap").classList.toggle("hidden", g.mode === "koth" || (g.mode === "discovery" && !g.current));
   document.querySelector(".stage .bar").classList.toggle("hidden", g.mode === "koth");
 
   renderScoreboard(popIndex);
@@ -2304,6 +2431,7 @@ function renderGame(popIndex = -1) {
     whose: ", whose playlist is this on?",
     oldernewer: ", older or newer than the last song?",
     koth: "",
+    discovery: g.current ? " shared this one" : ", pick a song to share",
   };
   const soloPrompts = {
     guess: "Name that song!",
@@ -2356,6 +2484,7 @@ function renderGame(popIndex = -1) {
     if (g.mode === "oldernewer" && g.reference) {
       extra.append("Last song was ", el("b", "", formatCardDate(g.reference, g.months)));
     }
+    if (g.mode === "discovery") extra.append("Shared by ", el("b", "", p.name));
   }
 
   renderControls();
@@ -2455,6 +2584,31 @@ function renderControls() {
       else c.append(playBtn());
       c.append(albumGrid());
       break;
+
+    case "discovery": {
+      const p = g.players[g.active];
+      if (has) {
+        const shared = g.disc.played[g.disc.played.length - 1];
+        c.append(button(shared.approved ? "✓ Approved" : "👍 Approve", shared.approved ? "teal" : "", () => { shared.approved = !shared.approved; renderGame(); }));
+        c.append(button("Replay", "", onDiscPlay), button(revealed && endsAfterThisTurn() ? "See results" : "Next player ▶", "primary", finishTurn));
+        break;
+      }
+      g.disc.choices.forEach((card) => {
+        const pick = button("", "disc-pick", () => onDiscPick(card));
+        pick.style.setProperty("--c", p.color);
+        pick.append(el("b", "", card.title), el("small", "", card.artists));
+        c.append(pick);
+      });
+      if (!g.disc.choices.length) c.append(el("p", "muted", `${p.name} has no songs left to share.`));
+      {
+        const row = el("div", "disc-more");
+        if (deckFor(g.active).length > g.disc.choices.length) row.append(button("↻ 5 different songs", "tiny", () => { discDeal(); renderGame(); }));
+        row.append(button("Skip turn", "tiny", finishTurn));
+        c.append(row);
+      }
+      hint.textContent = "Pick one and everyone listens. Like it? Approve it and it goes in the playlist at the end.";
+      break;
+    }
 
     case "koth": {
       const k = g.koth;
@@ -2621,6 +2775,7 @@ function wire() {
   $("back-btn").addEventListener("click", () => { playback.pause(); keepAwake(false); retryOnReturn = null; renderSetup(); showScreen("screen-setup"); });
   $("again-btn").addEventListener("click", newGame);
   $("copy-btn").addEventListener("click", onCopyShare);
+  $("save-btn").addEventListener("click", onSaveApproved);
   $("share-btn").addEventListener("click", () => navigator.share({ text: $("share-text").textContent }).catch(() => {}));
   $("change-btn").addEventListener("click", () => { renderSetup(); showScreen("screen-setup"); });
 }
@@ -2660,6 +2815,7 @@ async function main() {
   if (granted[0] && SCOPES.split(" ").some((s) => !granted.includes(s))) {
     setStatus($("setup-status"), "Jukemonster needs more Spotify permissions to play music. Please sign out and sign in again.", "warn");
   }
+  finishPendingSave();
   signedIn = true;
   startBrowserPlayer();
   refreshDevices();
