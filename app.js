@@ -1895,11 +1895,17 @@ async function onDiscPlay() {
 // Saves the approved songs as a new private playlist. Needs an extra permission:
 // the first time, the host signs in again and the save finishes when they're back.
 async function onSaveApproved() {
-  const uris = game.disc.played.filter((x) => x.approved).map((x) => "spotify:track:" + x.card.track_id);
-  const name = `Jukemonster Discovery ${new Date().toLocaleDateString()}`;
+  const to = $("save-to");
+  const target = to.value;
+  store.set("jm_save_to", target);
+  // Leave out songs the chosen playlist already has (when we loaded it for this game).
+  const have = new Set(((state.loads.get(target) || {}).cards || []).map((c) => c.track_id));
+  const uris = game.disc.played.filter((x) => x.approved && !have.has(x.card.track_id)).map((x) => "spotify:track:" + x.card.track_id);
+  const name = target ? to.options[to.selectedIndex].text : `Jukemonster Discovery ${new Date().toLocaleDateString()}`;
+  if (!uris.length) { setStatus($("save-status"), `"${name}" already has all of those songs.`, "ok"); return; }
   const granted = ((store.get("jm_token") || {}).scope || "").split(" ");
   if (!granted.includes("playlist-modify-private")) {
-    store.set("jm_pending_save", { name, uris });
+    store.set("jm_pending_save", { name, uris, target });
     setStatus($("save-status"), "Spotify needs your OK to make playlists. Taking you to sign in...");
     startLogin(SAVE_SCOPES);
     return;
@@ -1907,16 +1913,18 @@ async function onSaveApproved() {
   $("save-btn").disabled = true;
   setStatus($("save-status"), "Saving...");
   try {
-    await savePlaylist(name, uris);
-    setStatus($("save-status"), `Saved "${name}" to your Spotify.`, "ok");
+    await savePlaylist(name, uris, target);
+    setStatus($("save-status"), `Added ${plural(uris.length, "song")} to "${name}".`, "ok");
   } catch (err) {
     $("save-btn").disabled = false;
     setStatus($("save-status"), "Couldn't save the playlist. " + err.message, "err");
   }
 }
 
-async function savePlaylist(name, uris) {
-  const list = await api("/me/playlists", { method: "POST", body: { name, public: false, description: "Songs we approved in a Jukemonster Discovery game." } });
+// Adds the songs to the playlist with id target, or to a new private playlist called name.
+async function savePlaylist(name, uris, target = "") {
+  const list = target ? { id: target }
+    : await api("/me/playlists", { method: "POST", body: { name, public: false, description: "Songs we approved in a Jukemonster Discovery game." } });
   for (let i = 0; i < uris.length; i += 100) {
     const body = { uris: uris.slice(i, i + 100) };
     try {
@@ -1934,8 +1942,8 @@ async function finishPendingSave() {
   if (!pending) return;
   store.remove("jm_pending_save");
   try {
-    await savePlaylist(pending.name, pending.uris);
-    setStatus($("setup-status"), `Saved "${pending.name}" to your Spotify.`, "ok");
+    await savePlaylist(pending.name, pending.uris, pending.target);
+    setStatus($("setup-status"), `Added ${plural(pending.uris.length, "song")} to "${pending.name}".`, "ok");
   } catch (err) {
     setStatus($("setup-status"), "Couldn't save the Discovery playlist. " + err.message, "err");
   }
@@ -2287,7 +2295,12 @@ function endGame(reason) {
     const approved = game.disc.played.filter((x) => x.approved);
     $("save-row").classList.toggle("hidden", !approved.length);
     $("save-btn").disabled = false;
-    $("save-btn").textContent = `Save ${plural(approved.length, "approved song")} as a playlist`;
+    $("save-btn").textContent = `Save ${plural(approved.length, "approved song")}`;
+    const to = $("save-to");
+    to.replaceChildren(new Option("A new playlist", ""));
+    (state.playlists || []).filter((pl) => pl.mine).forEach((pl) => to.append(new Option(pl.name, pl.id)));
+    to.value = store.get("jm_save_to", "");
+    if (to.selectedIndex < 0) to.value = "";
     setStatus($("save-status"), "");
     showShare(discShareText());
     showScreen("screen-end");
@@ -2776,6 +2789,7 @@ function wire() {
   $("again-btn").addEventListener("click", newGame);
   $("copy-btn").addEventListener("click", onCopyShare);
   $("save-btn").addEventListener("click", onSaveApproved);
+  $("save-to").addEventListener("change", () => { $("save-btn").disabled = false; setStatus($("save-status"), ""); });
   $("share-btn").addEventListener("click", () => navigator.share({ text: $("share-text").textContent }).catch(() => {}));
   $("change-btn").addEventListener("click", () => { renderSetup(); showScreen("screen-setup"); });
 }
