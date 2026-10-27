@@ -263,3 +263,8 @@ button.score { cursor: pointer; }
 .play-help { margin: 10px 0; }
 .koth-undo { flex-basis: 100%; display: flex; justify-content: flex-end; margin-bottom: -6px; }
 .controls .koth-undo .link-btn { min-width: 0; background: none; border: 0; box-shadow: none; padding: 2px 4px; font-size: 13px; color: var(--muted); text-decoration: underline; cursor: pointer; }
+.controls .disc-pick { flex: 1 1 100%; max-width: 560px; min-width: 0; border-left: 8px solid var(--c); display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.disc-pick b { font-family: var(--marker); font-weight: 400; font-size: 19px; line-height: 1.15; overflow-wrap: anywhere; }
+.disc-pick small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.disc-more { flex-basis: 100%; display: flex; justify-content: center; gap: 10px; }
+#save-row { text-align: center; margin: 10px 0; }
