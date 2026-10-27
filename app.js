@@ -1864,7 +1864,24 @@ function kothEntries(cards, kind, pick) {
   }
   const list = shuffle([...byKey.values()]);
   if (pick === "top") list.sort((a, b) => b.owners.size - a.owners.size || b.songs.length - a.songs.length);
-  return list;
+  return pick === "random" ? takeTurns(list) : list;
+}
+
+// Random brackets: players take turns adding one of their own, so everyone gets about the same share.
+function takeTurns(list) {
+  const piles = new Map();
+  for (const e of list) for (const o of e.owners) {
+    if (!piles.has(o)) piles.set(o, []);
+    piles.get(o).push(e);
+  }
+  const out = [], used = new Set();
+  while (out.length < list.length) {
+    for (const pile of piles.values()) {
+      while (pile.length && used.has(pile[0])) pile.shift();
+      if (pile.length) { used.add(pile[0]); out.push(pile.shift()); }
+    }
+  }
+  return out;
 }
 
 // Seeds 1..n in bracket order, so 1 meets n first and 1 and 2 can only meet in the final.
