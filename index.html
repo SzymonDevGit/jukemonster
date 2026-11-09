@@ -6,9 +6,7 @@
   <title>Jukemonster</title>
   <meta name="description" content="A one-screen music party game. Everyone brings a Spotify playlist; Jukemonster is the jukebox.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 40'%3E%3Crect width='64' height='40' rx='6' fill='%233a332c'/%3E%3Crect x='6' y='5' width='52' height='12' rx='2' fill='%23fffaf0'/%3E%3Crect x='6' y='14' width='52' height='3' fill='%23e5642b'/%3E%3Ccircle cx='20' cy='27' r='6' fill='%23fffaf0'/%3E%3Ccircle cx='44' cy='27' r='6' fill='%23fffaf0'/%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Space+Mono:wght@400;700&display=swap">
+  <link rel="stylesheet" href="fonts/fonts.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -47,7 +45,7 @@
   <section id="screen-setup" class="screen hidden">
     <header class="setup-head">
       <h1 class="logo">Jukemonster</h1>
-      <p class="muted small">Signed in as <span id="user-name">...</span> · <a href="#" id="logout-link">Sign out</a></p>
+      <p class="muted small">Signed in as <span id="user-name">...</span> · <a href="#" id="logout-link">Sign out</a> · <a href="#" id="forget-link">Forget me</a></p>
       <p class="browser-note">Don't use Firefox or Zen for now: Spotify won't play songs there. Use Chrome or Edge, or play through the Spotify app.</p>
     </header>
 
@@ -199,9 +197,8 @@
     </div>
   </section>
 
-  <footer class="foot muted small">Jukemonster by <a href="https://szy.monster/">szy.monster</a> · <a class="discord-link" href="https://discord.gg/bHxaXgjpfe" target="_blank" rel="noopener">Bugs &amp; suggestions: join our Discord</a></footer>
+  <footer class="foot muted small">Jukemonster by <a href="https://szy.monster/">szy.monster</a> · <a href="privacy.html">Privacy</a> · <a class="discord-link" href="https://discord.gg/bHxaXgjpfe" target="_blank" rel="noopener">Bugs &amp; suggestions: join our Discord</a></footer>
 
   <script src="app.js"></script>
-  <script src="https://sdk.scdn.co/spotify-player.js" async></script>
 </body>
 </html>

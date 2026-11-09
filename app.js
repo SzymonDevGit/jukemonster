@@ -27,7 +27,6 @@ const SCOPES = [
   "user-modify-playback-state",
   "streaming",
   "user-read-private",
-  "user-read-email",
 ].join(" ");
 // Asked for only when someone saves a Discovery playlist.
 const SAVE_SCOPES = "playlist-modify-private playlist-modify-public";
@@ -216,6 +215,16 @@ async function accessToken() {
 function logout() {
   store.remove("jm_token");
   location.reload();
+}
+
+// "Forget me": removes everything Jukemonster keeps in this browser (sign-in, Client ID, players,
+// scores, song cache). Spotify's developer rules ask for a way to disconnect and delete data.
+function forgetEverything() {
+  if (!confirm("Remove everything Jukemonster keeps in this browser? You'll be signed out, and your Client ID, player names, best scores and song list are deleted.")) return;
+  for (const s of [localStorage, sessionStorage]) {
+    try { Object.keys(s).filter((k) => k.startsWith("jm_")).forEach((k) => s.removeItem(k)); } catch { /* storage blocked */ }
+  }
+  location.replace(REDIRECT_URI);
 }
 
 // Switches to another Spotify app (or forgets it when id is empty).
@@ -932,6 +941,18 @@ window.onSpotifyWebPlaybackSDKReady = () => {
   debug("browser player script loaded");
   startBrowserPlayer();
 };
+
+// Spotify's player script is only loaded once you're signed in, so nothing loads from Spotify
+// for people who only look at the sign-in screen.
+function loadPlayerScript() {
+  if (document.getElementById("spotify-sdk")) return;
+  const script = document.createElement("script");
+  script.id = "spotify-sdk";
+  script.src = "https://sdk.scdn.co/spotify-player.js";
+  script.async = true;
+  script.onerror = () => debug("browser player script failed to load");
+  document.head.append(script);
+}
 
 // On phones, playing in this tab puts the song on the lock screen; show a cover title instead.
 function hideNowPlaying() {
@@ -2748,6 +2769,7 @@ function wire() {
   renderOwnApp();
   document.querySelectorAll(".game-link").forEach((e) => { e.textContent = REDIRECT_URI.replace(/^https?:\/\//, ""); });
   $("logout-link").addEventListener("click", (e) => { e.preventDefault(); logout(); });
+  $("forget-link").addEventListener("click", (e) => { e.preventDefault(); forgetEverything(); });
 
   $("pick-solo").addEventListener("click", () => setSolo(true));
   $("pick-multi").addEventListener("click", () => setSolo(false));
@@ -2831,6 +2853,7 @@ async function main() {
   }
   finishPendingSave();
   signedIn = true;
+  loadPlayerScript();
   startBrowserPlayer();
   refreshDevices();
   refreshPlaylists();
