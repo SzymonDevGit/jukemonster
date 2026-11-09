@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy · Jukemonster</title>
+  <meta name="description" content="What Jukemonster keeps in your browser, what it asks Spotify for, and who to contact.">
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .doc { width: 100%; max-width: 760px; padding: 36px 16px 40px; line-height: 1.6; }
+    .doc h2 { font-family: var(--marker); font-weight: 400; font-size: 24px; margin: 28px 0 8px; }
+    .doc li { margin: 6px 0; }
+    .doc .panel p:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="stripes"></div>
+  <main class="doc">
+    <p><a href="./">← Back to Jukemonster</a></p>
+    <h1 class="logo">Privacy</h1>
+    <p class="muted small">Last updated 9 November 2026</p>
+
+    <div class="panel">
+      <p><strong>The short version:</strong> Jukemonster runs in your browser and talks straight to Spotify. Nothing you do in it is sent to us, and there are no ads, analytics or cookies. What it remembers is kept in your own browser, and you can wipe it at any time with the button below.</p>
+    </div>
+
+    <h2>Who runs Jukemonster</h2>
+    <p>Jukemonster is part of szy.monster and is run by Szymon. For anything about privacy or your data, email <a href="mailto:info@cheltenhamdata.co.uk">info@cheltenhamdata.co.uk</a>.</p>
+
+    <h2>What Spotify shares with Jukemonster</h2>
+    <p>You sign in on Spotify's own page, through a Spotify app that you (or whoever is hosting the game) made in the Spotify developer dashboard. Jukemonster asks Spotify for permission to:</p>
+    <ul>
+      <li>read your playlists, so you can pick the songs to play with;</li>
+      <li>see and control what's playing on your devices, and play music in this browser, so it can be the jukebox;</li>
+      <li>see your account's country and whether it's Premium, because Spotify only plays full songs for Premium accounts;</li>
+      <li>only if you save a Discovery playlist: create and change playlists, to save it to your account.</li>
+    </ul>
+    <p>It doesn't ask for your email address. All of this goes straight between your browser and Spotify. None of it reaches szy.monster. Spotify's player script is loaded from Spotify once you're signed in. See <a href="https://www.spotify.com/uk/legal/privacy-policy/">Spotify's privacy policy</a>.</p>
+
+    <h2>What is kept in your browser</h2>
+    <p>Jukemonster uses your browser's storage (localStorage), not cookies. It never leaves your device:</p>
+    <ul>
+      <li><strong>Your Spotify app's Client ID</strong>, so you don't paste it every time.</li>
+      <li><strong>Your Spotify sign-in</strong> (a key from Spotify that lets the game act for you), until you sign out.</li>
+      <li><strong>Game settings</strong>: player names, chosen playlists, mode and length, and which device to play on.</li>
+      <li><strong>Your best solo scores.</strong></li>
+      <li><strong>The default song list</strong> Jukemonster looked up on Spotify, so it doesn't look them all up again.</li>
+      <li><strong>Discovery</strong>: which playlist to save approved songs to, and a save waiting for your permission.</li>
+    </ul>
+    <p>These stay until you sign out (which removes the sign-in), press <strong>Forget me</strong>, or clear this site's data in your browser.</p>
+
+    <h2>Disconnect and delete</h2>
+    <div class="panel">
+      <p>This removes everything Jukemonster keeps in this browser, including your sign-in and Client ID.</p>
+      <p><button type="button" class="btn danger" id="forget-btn">Forget me on this device</button> <span id="forget-done" class="muted small" hidden>Done. Everything is removed.</span></p>
+      <p class="small">To stop your Spotify app having access to your account too, remove it under <a href="https://www.spotify.com/account/apps/">Manage apps</a> on your Spotify account page.</p>
+    </div>
+
+    <h2>Other companies</h2>
+    <ul>
+      <li><strong>Cloudflare</strong> hosts this site. Like any web server it sees your IP address and browser details to send you the page and protect it from attacks. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>.</li>
+      <li><strong>Spotify</strong>, as above.</li>
+      <li>The fonts come from this site's own server, not from Google. The Discord link only takes you there if you click it.</li>
+    </ul>
+
+    <h2>Your rights</h2>
+    <p>Under UK data protection law (UK GDPR) you can ask what data we hold about you, and have it corrected or deleted. We don't keep anything about you on our side, so the button above is usually all you need. If you have a question, email <a href="mailto:info@cheltenhamdata.co.uk">info@cheltenhamdata.co.uk</a>. You can also complain to the UK's data protection regulator, the <a href="https://ico.org.uk/make-a-complaint/">ICO</a>.</p>
+  </main>
+  <footer class="foot muted small">Jukemonster by <a href="https://szy.monster/">szy.monster</a></footer>
+  <script>
+    document.getElementById("forget-btn").addEventListener("click", function () {
+      if (!confirm("Remove everything Jukemonster keeps in this browser?")) return;
+      [localStorage, sessionStorage].forEach(function (s) {
+        try { Object.keys(s).filter(function (k) { return k.indexOf("jm_") === 0; }).forEach(function (k) { s.removeItem(k); }); } catch (e) { /* storage blocked */ }
+      });
+      document.getElementById("forget-done").hidden = false;
+    });
+  </script>
+</body>
+</html>
